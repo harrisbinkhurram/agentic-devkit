@@ -35,6 +35,20 @@ alias cd_wf="cd ${MY_WORKFLOW_DIR}"
 [ -f ~/.aws_keys ] && source ~/.aws_keys
 [ -f ~/.my_secrets ] && source ~/.my_secrets
 
+########################### Clear Shadowing Aliases ####
+# zsh refuses to define a function whose name is already an alias, and the parse
+# error kills the REST of that file - every definition after it is silently lost.
+# An alias left behind by an older generation of this setup is the usual culprit,
+# so clear our own namespace before defining anything in it.
+if [ -n "$ZSH_VERSION" ]; then
+    unalias -m 'a_g_*' 'a_c_*' 'a_s_*' 2>/dev/null
+else
+    for a_stale_alias in $(alias 2>/dev/null | sed -n 's/^alias \(a_[gcs]_[a-zA-Z0-9_]*\)=.*/\1/p'); do
+        unalias "$a_stale_alias" 2>/dev/null
+    done
+    unset a_stale_alias
+fi
+
 ########################### Sourced Functions ####
 source "$MY_WORKFLOW_DIR/sourced/process.sh"
 source "$MY_WORKFLOW_DIR/sourced/worktree.sh"
