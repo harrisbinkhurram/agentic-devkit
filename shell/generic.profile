@@ -12,11 +12,9 @@ fi
 ########################### Organization-Specific Profile ####
 if [ -n "$a_company_name" ] && [ -n "$a_machine_type" ]; then
     export a_org_profile="${MY_WORKFLOW_DIR}/shell/${a_company_name}.${a_machine_type}.profile"
-    if [ -f "$a_org_profile" ]; then
-        source "$a_org_profile"
-    else
-        echo "Warning: Organization profile not found: $a_org_profile"
-    fi
+    # A missing org profile is benign: the generic core ships none, and an overlay
+    # (e.g. a company overlay) sources its own org profile after this file loads.
+    [ -f "$a_org_profile" ] && source "$a_org_profile"
 fi
 
 ########################### Directory Aliases ####
