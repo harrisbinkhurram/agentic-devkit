@@ -1,9 +1,9 @@
 ---
-name: a_sk_l_review_pr
+name: a_sk_review_pr
 description: Review a GitHub PR end-to-end from just its URL. Give it a PR link (or owner/repo#N); it finds the repo you ALREADY have cloned locally (via a cached lookup, then a scan of your cd_w workspace — never a duplicate clone), clones into cd_w only if you don't have it, spins up a git worktree checked out on the PR's real head branch updated to latest, then runs the project's own review skill (review-pr) if it has one or the global global-pr-reviewer otherwise, auto-posts the comments that clear a high bar as GitHub inline review comments, and tears the worktree + local branch down. This is a SKILL, not a routine (no _r); a routine may call it. Use when asked to "review this PR <url>", "review a PR from its link", "do a full review of <github pull url>", or given a bare GitHub PR URL to review. Parameterized: pr (URL / owner/repo#N / number), post (auto | draft), reviewer (auto | project | global).
 ---
 
-# a_sk_l_review_pr — review a GitHub PR from its URL
+# a_sk_review_pr — review a GitHub PR from its URL
 
 One entry point: hand it a PR URL and it does the whole thing. It owns **getting the right code onto disk with zero duplication** and the **posting + cleanup**; it delegates the **review itself** to an existing reviewer skill. Do not reinvent the review engine, the repo-resolution logic, or the worktree layout — each already exists and is reused here.
 

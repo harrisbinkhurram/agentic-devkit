@@ -19,7 +19,7 @@ The global dirs that Claude Code loads hold **links, not copies**. The real file
 
 | Global path Claude loads | Symlinks to (source of truth) | Namespace | Installer |
 |---|---|---|---|
-| `~/.claude/skills/<name>/` | `skills/<name>/` | `a_sk_*`, `a_sk_l_*`, `a_r_*`, `a_r_l_*` | `a_c_skills` |
+| `~/.claude/skills/<name>/` | `skills/<name>/` | `a_sk_*`, `a_r_*`, `a_r_l_*` | `a_c_skills` |
 | `~/.claude/agents/<name>.md` | `agents/<name>.md` | `a_sag_*` subagents | `a_c_agents` |
 
 > **The one-shot install command:** `./install.sh` (at the repo root) is the whole install. On a fresh clone it wires the shell (once) *and* links everything (all skills + all agents); on an already-set-up machine it just re-links. It is idempotent - re-run it after a `git pull` on any linked machine to pick up new skills/agents. `./install.sh --link-only` skips the shell step; `-n` dry-runs; `-f` repoints stray links.
@@ -97,12 +97,14 @@ Everything of mine starts with `a_` (my namespace), then **prefix markers** (`x_
 
 **MODIFIER** (optional, after the KIND):
 
-| Marker | Means |
-|---|---|
-| `l_` | must run **locally** (filesystem, cloned repos, `mdnest`, browser, worktrees) |
-| `g_` | **global** (available everywhere) - in the skill/agent sense |
+| Marker | Applies to | Means |
+|---|---|---|
+| `l_` | **routines only** (`a_r_l_*`) | this routine must run **locally** (filesystem, cloned repos, `mdnest`, browser, worktrees), so it cannot be scheduled in the cloud |
+| `g_` | skills / agents | **global** (available everywhere) |
 
-So: on-demand skill `a_sk_<name>`; local on-demand skill `a_sk_l_<name>` (e.g. `a_sk_l_review_pr`); routine `a_r_<name>` (cloud) / `a_r_l_<name>` (local-only); agent `a_sag_<name>`.
+> **`l_` is only meaningful on a routine.** A routine is the one kind that could run either in the cloud or on this machine, so it needs the distinction. Everything else (`a_sk_*`, `a_sag_*`, `a_c_*`, `a_g_*`) already runs where the session runs, so `l_` says nothing. Never write `a_sk_l_*`.
+
+So: skill `a_sk_<name>`; routine `a_r_<name>` (cloud-capable) or `a_r_l_<name>` (local-only); agent `a_sag_<name>`.
 
 > **The one `g_` overload:** in the **command/script layer** `g_` means **git** (`a_g_worktree_*`, `a_g_push`). In the **skill/agent layer** `g_` means **global**. Context disambiguates.
 
@@ -137,7 +139,7 @@ my_setup/
 
 **A shell command or script** - needs current-shell context (cd/export)? Add it to a file in `sourced/`. Otherwise add a script to `scripts/` (auto-on-PATH). Pick the marker by trait (see the glossary above): `a_c_` (user-facing command), `a_s_` (helper/library script), `a_g_` (git command). New category of sourced functions? Create `sourced/<name>.sh` and add a `source` line in `generic.profile`.
 
-**A skill** - create `skills/<name>/SKILL.md` (frontmatter `name:` must equal the dir name). Use `a_sk_<name>` for an on-demand skill (`a_sk_l_<name>` if it must run locally), or `a_r_<name>` / `a_r_l_<name>` for routines. Run `a_c_skills install <name>`, then commit.
+**A skill** - create `skills/<name>/SKILL.md` (frontmatter `name:` must equal the dir name). Use `a_sk_<name>` for an on-demand skill, or `a_r_<name>` / `a_r_l_<name>` for a routine (`l_` only if it cannot run in the cloud). Run `a_c_skills install <name>`, then commit.
 
 **An agent** - create `agents/<name>.md` (`a_sag_` prefix, generic and project-agnostic; see `agents/README.md` for the house conventions). Run `a_c_agents install <name>`, then commit.
 

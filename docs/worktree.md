@@ -1,130 +1,102 @@
-# Git Worktree Management Tools
+# Worktree helpers (`a_g_worktree_*`)
 
-Enhanced scripts for managing git worktrees with automatic directory switching and improved error handling.
+Git worktrees let you have several branches checked out at once, in separate directories, off one
+clone. These helpers wrap that with auto-cd, a consistent directory layout, and removal that
+refuses to throw away work you have not pushed.
 
-## Files
-
-- `a_g_worktree_init` - Create new worktrees
-- `a_g_worktree_remove` - Remove worktrees
-- `worktree.sh` - Shell functions wrapper (auto-sourced via generic.profile)
-
-## Quick Start
-
-### Option 1: Use Shell Functions (Recommended)
-
-If you've followed the main setup (configs.profile sources generic.profile), these are already available.
-
-Otherwise, add to your `~/.zshrc` or `~/.bashrc`:
-
-```bash
-source /path/to/worktree.sh
-```
-
-Now you get:
-- **Auto-cd** after creating worktrees
-- Enhanced commands with better UX
-- Additional helper functions
-
-### Option 2: Use Scripts Directly
-
-Simply call the scripts:
-```bash
-a_g_worktree_init my-feature    # Creates but doesn't cd
-source a_g_worktree_init my-feature  # Creates and cds (bash/zsh)
-```
-
-## Commands
-
-### Create a Worktree
-
-```bash
-# Using functions (auto-cd enabled)
-a_g_worktree_init feature/auth-improvements
-
-# You can use any branch name you want (no automatic prefix)
-a_g_worktree_init bugfix/login-issue
-a_g_worktree_init my-custom-branch
-
-# Using functions with custom base branch
-a_g_worktree_init feature/new-api --base develop
-
-# Using script directly (manual cd required)
-./a_g_worktree_init feature/my-feature
-cd /path/to/WorkTrees/project/feature-my-feature
-```
-
-Creates:
-- Branch: Whatever name you provide (e.g., `feature/auth-improvements`)
-- Directory: Slashes converted to dashes (e.g., `feature-auth-improvements`)
-- Path: `../WorkTrees/<project-name>/feature-auth-improvements`
-
-**Note**: Slashes in branch names are converted to dashes for directory names to avoid nested folders.
-
-### Remove a Worktree
-
-```bash
-# Default: warns if unpushed commits
-a_g_worktree_remove feature/auth-improvements
-
-# Also accepts dash format
-a_g_worktree_remove feature-auth-improvements
-
-# Verify merged into main before removing (safe)
-a_g_worktree_remove feature/auth -v
-
-# Force remove, skip all checks
-a_g_worktree_remove feature/auth -f
-```
-
-### List Worktrees
-
-```bash
-a_g_worktree_list
-```
-
-### Switch Between Worktrees
-
-```bash
-a_g_worktree_switch my-feature
-a_g_worktree_main    # Return to main repository
-```
-
-### Update Branch with Latest Main
-
-```bash
-a_g_worktree_update  # Fetches main, rebases, auto-stashes uncommitted changes
-```
-
-### Conclude a Merged Worktree
-
-```bash
-a_g_worktree_conclude feature/my-feature  # Alias for remove --verify
-```
-
-## Safety Features
-
-- **Unpushed code warning**: Warns before deleting worktrees with unpushed commits
-- **Merge verification**: `--verify` mode checks multiple ways (including squash merges)
-- **Ticket verification**: Extracts ticket numbers from commits, checks if they appear in main
-- **Protected branches**: Never deletes main, master, staging, develop, prod, production
-- **Auto-stash**: `a_g_worktree_update` stashes uncommitted changes before rebase
-
-## Directory Structure
+The rule this exists to support: **start a task in a worktree, never branch in the main
+checkout.** The main clone stays on its default branch and clean.
 
 ```
 repos/
-├── my-project/                     # Main repository
+├── my-project/                  # the main clone. Stays clean.
 └── WorkTrees/
     └── my-project/
-        ├── feature-auth/           # Worktree for branch feature/auth
-        ├── bugfix-login/           # Worktree for branch bugfix/login
-        └── my-custom-branch/       # Worktree for branch my-custom-branch
+        ├── feature-auth/        # branch feature/auth
+        ├── bugfix-login/        # branch bugfix/login
+        └── PROJ-123-retry/      # branch PROJ-123-retry
 ```
+
+Slashes in a branch name become dashes in the directory name, so nothing nests.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `a_g_worktree_init <branch> [-b <base>]` | Create a worktree and cd into it. New branch, or check out an existing one. Without `-b` it offers a base-branch picker. |
+| `a_g_worktree_list` | List this repo's worktrees with their branch and state |
+| `a_g_worktree_switch <name>` | cd to an existing worktree (slash or dash form both work) |
+| `a_g_worktree_main` | cd back to the main clone |
+| `a_g_worktree_review <pr\|branch>` | Make a throwaway worktree to review someone's branch or PR |
+| `a_g_worktree_update` | Fetch the default branch and rebase onto it, auto-stashing uncommitted changes first |
+| `a_g_worktree_remove <name> [-v\|-f]` | Remove a worktree. Warns on unpushed commits. `-v` verifies it was merged first; `-f` skips every check. |
+| `a_g_worktree_conclude <name>` | `remove --verify`, for a worktree whose work has landed |
+| `a_g_worktree_doctor` | Diagnose a broken or confusing worktree state |
+| `a_g_worktree_prune` | Clear stale worktree registrations left behind by deleted directories |
+
+Related, in `sourced/git.sh` and `scripts/`: `a_g_push`, `a_g_ship`, `a_g_main`, `a_g_reset`,
+`a_g_branch_cleanup`, `a_g_branch_delete`.
+
+## Where they come from
+
+These are **shell functions** in [`sourced/worktree.sh`](../sourced/worktree.sh), auto-sourced by
+`generic.profile`. They have to be functions rather than scripts because a script runs in a
+subshell and cannot change the directory of the shell that called it. That is what gives you the
+auto-cd.
+
+Two of them (`a_g_worktree_init`, `a_g_worktree_remove`) also exist as standalone scripts in
+`scripts/`, for use from a non-interactive context such as Claude Code's Bash tool where the
+profile is not sourced:
+
+```bash
+bash scripts/a_g_worktree_init PROJ-123-retry
+```
+
+That form does **not** cd. Read the worktree path it prints and use that path in every following
+command.
+
+## Examples
+
+```bash
+a_g_worktree_init feature/auth-improvements      # new branch, base picked interactively
+a_g_worktree_init feature/new-api -b develop     # new branch off develop, no picker
+a_g_worktree_init PROJ-123-retry                 # ticket-named, the usual case
+
+a_g_worktree_list
+a_g_worktree_switch feature-auth-improvements    # dash form
+a_g_worktree_switch feature/auth-improvements    # slash form, same worktree
+
+a_g_worktree_update                              # rebase this worktree onto latest main
+
+a_g_worktree_remove feature/auth-improvements    # warns if anything is unpushed
+a_g_worktree_remove feature/auth -v              # only if merged (squash-merge aware)
+a_g_worktree_remove feature/auth -f              # force, no checks
+```
+
+## What stops you losing work
+
+- **Unpushed-commit warning** before any removal.
+- **Merge verification** under `-v`, which detects squash merges too, not just fast-forwards.
+- **Ticket verification**: pulls ticket keys out of the commits and checks whether they appear in
+  the default branch.
+- **Protected branches**: never removes `main`, `master`, `staging`, `develop`, `prod`, or
+  `production`.
+- **Auto-stash** before `a_g_worktree_update` rebases.
 
 ## Troubleshooting
 
-### Auto-cd doesn't work
-Make sure you're using the shell functions (sourced via generic.profile), or source the script: `source a_g_worktree_init my-feature`
+**Auto-cd does not happen.** You are running the script, not the function. Open a new shell (or
+`source ~/.zshrc`) so `generic.profile` loads the functions. From a non-interactive tool, auto-cd
+is not possible: use the path the script prints.
 
-### "Worktree not found" error
-The script shows available worktrees. Use the exact name from when you created it. Both slash and dash formats are accepted.
+**"Worktree not found".** The command prints the available worktrees. Use one of those names;
+both the slash and dash forms are accepted.
+
+**A worktree directory was deleted by hand.** Git still has it registered. Run
+`a_g_worktree_prune`, then `a_g_worktree_doctor` if anything still looks wrong.
+
+## Cleaning up in bulk
+
+`a_r_l_worktree_cleaner` sweeps a whole repo: it removes only the provably-done worktrees (branch
+merged, PR merged, or remote branch gone with nothing unpushed), prunes stale registrations, and
+leaves anything with real work alone. See [`../skills/README.md`](../skills/README.md).
