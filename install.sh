@@ -52,6 +52,14 @@ done
 say()  { echo -e "$@"; }
 step() { echo -e "\n${BLUE}==>${NC} $*"; }
 
+# The shell rc we wire / tell the user to re-source. One source of truth.
+detect_rc() {
+    case "$(basename "${SHELL:-/bin/zsh}")" in
+        bash) echo "$HOME/.bashrc" ;;
+        *)    echo "$HOME/.zshrc" ;;
+    esac
+}
+
 # ---------------------------------------------------------------------------
 # 1. Shell wiring (once per machine). Detect-or-create; never destructive.
 # ---------------------------------------------------------------------------
@@ -68,11 +76,7 @@ wire_shell() {
     fi
 
     # Pick the shell rc to wire.
-    local rc
-    case "$(basename "${SHELL:-/bin/zsh}")" in
-        bash) rc="$HOME/.bashrc" ;;
-        *)    rc="$HOME/.zshrc" ;;
-    esac
+    local rc; rc="$(detect_rc)"
 
     # (b) Does the rc already source a my_settings profile? Assume that wires us.
     if [ -f "$rc" ] && grep -Eq 'my_settings/.*\.profile' "$rc"; then
@@ -149,7 +153,18 @@ main() {
     link_claude
 
     say "\n${GREEN}Done.${NC} ${DIM}Skills + agents linked from $REPO_ROOT.${NC}"
-    say "${DIM}Restart Claude Code (or start a new session) to pick up new skills/agents.${NC}"
+    if $DRY_RUN; then
+        :
+    elif [ -n "${MY_WORKFLOW_DIR:-}" ]; then
+        say "${DIM}Shell already active in this terminal.${NC} ${DIM}Restart Claude Code to pick up new skills/agents.${NC}"
+    else
+        local rc; rc="$(detect_rc)"
+        say ""
+        say "${YELLOW}Next step - activate it in this terminal:${NC}"
+        say "    ${GREEN}source $rc${NC}   ${DIM}(or just open a new terminal)${NC}"
+        say "${DIM}A script runs in its own subshell and can't change your current shell,${NC}"
+        say "${DIM}so this one line is yours to run. Then restart Claude Code for the new skills/agents.${NC}"
+    fi
 }
 
 main
