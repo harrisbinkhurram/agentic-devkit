@@ -169,11 +169,18 @@ if [ -z "$BRANCH_NAME" ]; then
     echo -e "${YELLOW}Warning: Could not detect branch name${NC}"
 fi
 
-# Protected branches
-PROTECTED_BRANCHES="main master staging develop development prod production"
-for protected in $PROTECTED_BRANCHES; do
+# Protected branches — two tiers.
+#   FULLY_PROTECTED: never removable here. main/master belong in the main
+#     checkout and must never be deleted via this helper.
+#   REMOTE_PROTECTED: shared, long-lived branches that ARE removable as a soft
+#     delete (worktree + local branch go away, and can be recreated from origin),
+#     but whose REMOTE branch must never be deleted — even in --verify mode.
+FULLY_PROTECTED="main master"
+REMOTE_PROTECTED="staging develop development prod production"
+for protected in $FULLY_PROTECTED; do
     if [ "$BRANCH_NAME" = "$protected" ]; then
         echo -e "${RED}Error: Cannot delete protected branch '$BRANCH_NAME'${NC}"
+        echo -e "${YELLOW}main/master belong in the main checkout and are never removed here.${NC}"
         exit 1
     fi
 done
@@ -438,8 +445,20 @@ if [ -n "$BRANCH_NAME" ]; then
     echo "Deleting local branch..."
     git branch -D "$BRANCH_NAME" 2>/dev/null && echo -e "${GREEN}✓ Local branch deleted${NC}" || echo -e "${YELLOW}  (already deleted)${NC}"
 
-    # Delete remote only in verify mode (unless --keep-remote)
-    if [ "$VERIFY_MODE" = true ] && [ "$KEEP_REMOTE" = false ]; then
+    # Shared long-lived branches: never delete the remote, even in --verify mode.
+    # This keeps their removal a true soft delete (recreatable from origin).
+    IS_REMOTE_PROTECTED=false
+    for protected in $REMOTE_PROTECTED; do
+        if [ "$BRANCH_NAME" = "$protected" ]; then
+            IS_REMOTE_PROTECTED=true
+            break
+        fi
+    done
+
+    # Delete remote only in verify mode (unless --keep-remote or remote-protected)
+    if [ "$IS_REMOTE_PROTECTED" = true ]; then
+        echo -e "${YELLOW}Keeping remote branch '$BRANCH_NAME' — shared branch, remote is never deleted.${NC}"
+    elif [ "$VERIFY_MODE" = true ] && [ "$KEEP_REMOTE" = false ]; then
         echo "Deleting remote branch..."
         git push origin --delete "$BRANCH_NAME" 2>/dev/null && echo -e "${GREEN}✓ Remote branch deleted${NC}" || echo -e "${YELLOW}  (not found or already deleted)${NC}"
     fi

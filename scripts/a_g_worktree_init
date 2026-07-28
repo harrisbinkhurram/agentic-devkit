@@ -1,5 +1,5 @@
 #!/bin/bash
-# NOTE: This script is sourced (not executed) by the wrapper in sourced/worktree.sh
+# NOTE: This script is sourced (not executed) by the wrapper in worktree.sh
 # so that cd works. Use 'return' instead of 'exit' to avoid killing the terminal.
 
 # Colors for output
@@ -85,6 +85,17 @@ PROJECT_NAME=$(basename "$MAIN_ROOT")
 WORKTREES_DIR="$(dirname "$MAIN_ROOT")/WorkTrees"
 # Branch keeps original name (slashes allowed), directory name converts slashes to dashes
 BRANCH_NAME="$FEATURE_NAME"
+
+# Refuse to create a worktree for main/master — they belong in the main checkout,
+# and git would refuse the double-checkout anyway. Fail early with a clear message.
+for protected in main master; do
+    if [ "$BRANCH_NAME" = "$protected" ]; then
+        echo -e "${RED}Error: Refusing to create a worktree for protected branch '$BRANCH_NAME'${NC}"
+        echo -e "${YELLOW}main/master live in the main checkout. Use 'a_g_worktree_main' to work there.${NC}"
+        exit 1
+    fi
+done
+
 WORKTREE_DIR_NAME="${FEATURE_NAME//\//-}"
 WORKTREE_PATH="$WORKTREES_DIR/$PROJECT_NAME/$WORKTREE_DIR_NAME"
 

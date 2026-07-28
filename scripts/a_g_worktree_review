@@ -1,5 +1,5 @@
 #!/bin/bash
-# NOTE: This script is sourced (not executed) by the wrapper in sourced/worktree.sh
+# NOTE: This script is sourced (not executed) by the wrapper in worktree.sh
 # so that cd works. Use 'return' instead of 'exit' to avoid killing the terminal.
 #
 # Creates a "review" worktree from a GitHub PR or a remote branch. The local
