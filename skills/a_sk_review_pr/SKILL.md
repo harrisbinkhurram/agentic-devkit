@@ -65,11 +65,17 @@ Apply `a_r_l_pr_review`'s **Review-started announcement** verbatim. Compactly: b
 
 ```bash
 HEAD_SHA="$(gh pr view <N> --json headRefOid --jq '.headRefOid[0:7]')"
-gh api "repos/{OWNER}/{REPO}/issues/<N>/comments" -f body="🔍 Review started by **<AGENT-NAME>** (Claude Code) on \`$HEAD_SHA\`.
+ALREADY="$(gh api "repos/{OWNER}/{REPO}/issues/<N>/comments" \
+  --jq "[.[] | select(.body | test(\"Review started\"; \"i\")) | select(.body | contains(\"$HEAD_SHA\"))] | length")"
+
+if [ "$ALREADY" = "0" ]; then
+  gh api "repos/{OWNER}/{REPO}/issues/<N>/comments" -f body="🔍 Review started by **<AGENT-NAME>** (Claude Code) on \`$HEAD_SHA\`.
 Anything that needs action will land as inline comments; a clean pass posts nothing."
+fi
 ```
 
-- **Idempotent per head SHA:** check `gh api repos/{OWNER}/{REPO}/issues/<N>/comments` first and skip if one is already there for the current head. A force-push (new head SHA) gets a fresh announcement.
+- **Never reword the marker:** always the literal `🔍 Review started`, even on a re-review. The idempotency grep depends on it, so a variant like "Re-review started" defeats the check and duplicates the comment. The head SHA already distinguishes a re-review.
+- **Idempotent per head SHA:** the check above must pass before posting, and use the same case-insensitive grep to verify it landed. A force-push (new head SHA) gets a fresh announcement.
 - **`post=draft` posts nothing here:** a dry run leaves no trace on the PR.
 - **Best-effort:** if it fails, note it and review anyway. This step must never block the review.
 - This runs even on the `a_c_review_pr` path where steps 2 and 4 are skipped, since the worktree already exists there.

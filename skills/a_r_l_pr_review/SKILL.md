@@ -75,7 +75,8 @@ Post ONE top-level comment on the PR saying the review has started, **before** r
 - **Mode-gated.** `post=auto` posts it. `post=draft` does **not**: a dry run must leave no trace on the PR.
 - **Name the agent when one is defined.** If the global rules (`~/.claude/CLAUDE.md`) define an agent identity for this machine, name it in the comment, using whatever display form those rules specify. If no agent name is defined, post the same comment without one. Never invent a name and never guess a machine/unit suffix: read it from the global rules or leave it out.
 - **Keep Claude attribution.** The agent name labels the configured setup; it never replaces the fact that this is Claude Code. Both appear.
-- **Idempotent per head SHA.** Before posting, read the PR's existing issue comments (`gh api repos/{owner}/{repo}/issues/<N>/comments`) and skip if a review-started comment for the **current head SHA** is already there. Re-reviewing a **new** head SHA does post a fresh one, so a force-push gets its own announcement.
+- **Never reword the marker.** The comment MUST start with the literal string `🔍 Review started`, byte for byte, on every run. The idempotency check below greps for exactly that, so any variation ("Re-review started", "Starting review", a different emoji) silently defeats the check and posts a duplicate on the next run. Put the "this is a re-review" signal in the head SHA, which already differs, not in the wording.
+- **Idempotent per head SHA.** Before posting, check the PR's existing issue comments for the marker **and** the current short head SHA, case-insensitively. Skip if it is already there. A **new** head SHA posts a fresh one, so a force-push gets its own announcement.
 - **Best-effort, never blocking.** If the post fails, record it in the report and carry on with the review. A failed announcement is not a failed review.
 - **One per PR per run.** Do not repeat it per finding or per file.
 
@@ -83,9 +84,18 @@ Post ONE top-level comment on the PR saying the review has started, **before** r
 
 ```bash
 HEAD_SHA="$(gh pr view <N> --json headRefOid --jq '.headRefOid[0:7]')"
-gh api "repos/{owner}/{repo}/issues/<N>/comments" -f body="🔍 Review started by **<AGENT-NAME>** (Claude Code) on \`$HEAD_SHA\`.
+
+# Idempotency: marker + this head SHA must both be absent before posting.
+ALREADY="$(gh api "repos/{owner}/{repo}/issues/<N>/comments" \
+  --jq "[.[] | select(.body | test(\"Review started\"; \"i\")) | select(.body | contains(\"$HEAD_SHA\"))] | length")"
+
+if [ "$ALREADY" = "0" ]; then
+  gh api "repos/{owner}/{repo}/issues/<N>/comments" -f body="🔍 Review started by **<AGENT-NAME>** (Claude Code) on \`$HEAD_SHA\`.
 Anything that needs action will land as inline comments; a clean pass posts nothing."
+fi
 ```
+
+**Verify it landed with the same case-insensitive grep you used above.** A verification grep that is stricter than the marker you actually posted reports a false negative and sends you hunting for a comment that is sitting right there.
 
 With no agent name defined, drop the `by **...**` clause and keep the rest identical:
 
