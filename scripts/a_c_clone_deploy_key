@@ -3,12 +3,16 @@
 # a_c_clone_deploy_key
 # Set up a per-repo GitHub deploy key + SSH alias, then clone & configure a repo.
 # Works without `gh` installed. Each repo gets its own key (GitHub deploy keys
-# are one-repo-only), auto-selected via an SSH host alias.
+# are one-repo-only), auto-selected via an SSH host alias. The key is named after
+# the repo AND this machine, so one repo can hold a distinct key per machine.
 #
 # Usage:
-#   a_c_clone_deploy_key <repo-url> [git-user-name] [git-user-email]
+#   a_c_clone_deploy_key [repo-url] [git-user-name] [git-user-email]
+#
+# With no repo-url it prompts for one.
 #
 # Examples:
+#   a_c_clone_deploy_key                                    # prompts for the repo
 #   a_c_clone_deploy_key git@github.com:OWNER/private-repo.git
 #   a_c_clone_deploy_key git@github.com:org/repo.git "Ahsan Amin" "you@example.com"
 #   a_c_clone_deploy_key https://github.com/org/repo        # https form also accepted
@@ -43,15 +47,19 @@ auto-selected, guides you to register the key on GitHub (with write access),
 verifies auth, then clones and sets the local git identity. No 'gh' needed.
 
 ${BOLD}Usage:${RESET}
-  a_c_clone_deploy_key <repo-url> [git-user-name] [git-user-email]
+  a_c_clone_deploy_key [repo-url] [git-user-name] [git-user-email]
 
 ${BOLD}Arguments:${RESET}
   repo-url         git@github.com:ORG/REPO.git, https://github.com/ORG/REPO,
-                   or bare ORG/REPO
+                   or bare ORG/REPO. ${BOLD}Prompted for if omitted.${RESET}
   git-user-name    local git user.name  (default: git global, else "$DEFAULT_NAME")
   git-user-email   local git user.email (default: git global, else "$DEFAULT_EMAIL")
 
+The key is named <repo>_<machine>_ed25519 so each machine gets its own deploy
+key for the same repo, and the GitHub key list shows which machine it belongs to.
+
 ${BOLD}Examples:${RESET}
+  a_c_clone_deploy_key
   a_c_clone_deploy_key git@github.com:org/repo.git
   a_c_clone_deploy_key https://github.com/org/repo "Ada Lovelace" "ada@example.com"
   a_c_clone_deploy_key org/repo
@@ -61,9 +69,24 @@ EOF
 # ---- args ------------------------------------------------------------------
 case "${1:-}" in
   -h|--help) usage; exit 0 ;;
-  "") usage >&2; die "Missing <repo-url>." ;;
 esac
-RAW_URL="$1"
+
+RAW_URL="${1:-}"
+if [ -z "$RAW_URL" ]; then
+  # No repo given: ask for one. Requires a terminal, so a non-interactive caller
+  # (cron, CI, a piped shell) gets a clear error instead of hanging on read.
+  [ -t 0 ] || die "No <repo-url> given and stdin is not a terminal (cannot prompt)."
+  printf '%s\n' "${BOLD}Which repository do you want to clone?${RESET}"
+  printf '%s\n' "  Accepts: git@github.com:ORG/REPO.git | https://github.com/ORG/REPO | ORG/REPO"
+  while [ -z "$RAW_URL" ]; do
+    printf '%s' "  Repository: "
+    read -r RAW_URL || die "Aborted."
+    # strip surrounding whitespace a paste can bring along
+    RAW_URL="${RAW_URL#"${RAW_URL%%[![:space:]]*}"}"
+    RAW_URL="${RAW_URL%"${RAW_URL##*[![:space:]]}"}"
+    [ -n "$RAW_URL" ] || warn "Please enter a repository (Ctrl-C to abort)."
+  done
+fi
 
 # Identity: explicit arg -> git global -> built-in default.
 GIT_NAME="${2:-$(git config --global user.name  2>/dev/null || true)}"
@@ -94,21 +117,72 @@ case "$RAW_URL" in
   *) ;;  # bare ORG/REPO -> assumed github.com
 esac
 
-KEY="$HOME/.ssh/${REPO}_ed25519"
+# ---- name the key after the repo AND this machine --------------------------
+# One repo may be cloned on several machines; a per-machine key means revoking
+# one machine on GitHub never breaks the others, and the deploy-key list is
+# readable at a glance.
+MACHINE="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo unknown)"
+MACHINE="${MACHINE%.local}"
+slug() {  # lowercase, anything not [a-z0-9] -> '-', collapse and trim '-'
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-//' -e 's/-$//'
+}
+MACHINE_SLUG="$(slug "$MACHINE")"; MACHINE_SLUG="${MACHINE_SLUG:-unknown}"
+REPO_SLUG="$(slug "$REPO")";       REPO_SLUG="${REPO_SLUG:-repo}"
+
+KEY="$HOME/.ssh/${REPO_SLUG}_${MACHINE_SLUG}_ed25519"
+# Reuse a key made by the older repo-only naming scheme rather than orphaning it.
+LEGACY_KEY="$HOME/.ssh/${REPO}_ed25519"
+if [ ! -f "$KEY" ] && [ -f "$LEGACY_KEY" ]; then
+  KEY="$LEGACY_KEY"
+  LEGACY_IN_USE=1
+fi
+
 ALIAS="${REPO}.github.com"
 SSH_CONFIG="$HOME/.ssh/config"
 CLONE_URL="git@${ALIAS}:${ORG}/${REPO}.git"
 
+# An alias from an earlier run wins, because ssh will use ITS IdentityFile no
+# matter what we generate here. Adopt that key instead of creating an orphan.
+if [ -f "$SSH_CONFIG" ] && grep -q "^Host ${ALIAS}\$" "$SSH_CONFIG" 2>/dev/null; then
+  # Read the block out of the file directly. `ssh -G` is wrong here: when nothing
+  # matches it still prints the DEFAULT identity list (~/.ssh/id_rsa and friends),
+  # which we would then adopt as the deploy key.
+  ALIAS_KEY="$(awk -v want="$ALIAS" '
+    $1 ~ /^[Hh]ost$/ { inblk = 0; for (i = 2; i <= NF; i++) if ($i == want) inblk = 1; next }
+    inblk && tolower($1) == "identityfile" { print $2; exit }
+  ' "$SSH_CONFIG")"
+  ALIAS_KEY="${ALIAS_KEY/#\~/$HOME}"
+  if [ -n "$ALIAS_KEY" ] && [ "$ALIAS_KEY" != "$KEY" ]; then
+    KEY="$ALIAS_KEY"
+    ALIAS_KEY_ADOPTED=1
+    unset LEGACY_IN_USE
+  fi
+fi
+
+KEY_TITLE="${REPO} @ ${MACHINE}"
+
 printf '\n%s\n' "${BOLD}Deploy-key setup for ${ORG}/${REPO}${RESET}"
-printf '  key:   %s\n  alias: %s\n  clone: %s\n\n' "$KEY" "$ALIAS" "$CLONE_URL"
+printf '  machine:  %s\n  key:      %s\n  alias:    %s\n  clone:    %s\n  identity: %s <%s>\n\n' \
+  "$MACHINE" "$KEY" "$ALIAS" "$CLONE_URL" "$GIT_NAME" "$GIT_EMAIL"
+[ -n "${LEGACY_IN_USE:-}" ] && warn "Reusing existing key from the old repo-only naming scheme."
+if [ -n "${ALIAS_KEY_ADOPTED:-}" ]; then
+  warn "An existing 'Host ${ALIAS}' block in $SSH_CONFIG already pins this key,"
+  warn "so it is used instead of the per-machine name. Edit that block to change it."
+fi
 
 # ---- 1. SSH key ------------------------------------------------------------
 step "Step 1/5  Create SSH key"
 mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
+mkdir -p "$(dirname "$KEY")"
 if [ -f "$KEY" ]; then
   warn "Key already exists, reusing: $KEY"
+  # A private key with no .pub next to it still has everything needed to print one.
+  if [ ! -f "$KEY.pub" ]; then
+    ssh-keygen -y -f "$KEY" > "$KEY.pub" || die "Could not derive $KEY.pub (is $KEY passphrase-protected?)"
+    ok "Regenerated missing $KEY.pub"
+  fi
 else
-  ssh-keygen -t ed25519 -f "$KEY" -N "" -C "deploy-key:${ORG}/${REPO}"
+  ssh-keygen -t ed25519 -f "$KEY" -N "" -C "deploy-key:${ORG}/${REPO}@${MACHINE}"
   ok "Created $KEY"
 fi
 chmod 600 "$KEY"; chmod 644 "$KEY.pub"
@@ -138,7 +212,7 @@ step "Step 3/5  Add the deploy key to GitHub"
 cat <<EOF
   1. Open: ${BOLD}https://github.com/${ORG}/${REPO}/settings/keys${RESET}
   2. Click ${BOLD}Add deploy key${RESET}
-  3. Title: anything (e.g. "$(hostname -s 2>/dev/null || echo mac)")
+  3. Title: ${BOLD}${KEY_TITLE}${RESET}
   4. Key:   paste the line below
   5. ${BOLD}Check "Allow write access"${RESET}  (needed to push)
 
