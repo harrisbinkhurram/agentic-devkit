@@ -11,6 +11,8 @@ Everything here is deliberately generic: no company, client, or project specific
 
 > **Work directly on `main` in this checkout - no feature branches, no worktree for this repo.** This is an adhoc, personal repo kept deliberately low-friction: edit, commit, and push straight to `main`. There is no `develop`, no feature-branch flow, and no PR step here; everything lands on `main`. This is intentional for a concrete reason: the live skills/agents are symlinks into THIS checkout, so a change made in a separate worktree does not go live until it is merged back and this checkout is updated. Editing here makes it live immediately. If a stray feature branch ever shows up, fold its wanted work into `main` and delete it.
 
+> **No `Co-Authored-By: Claude` trailer on commits in this repo.** Leave it off, and leave off the "Generated with Claude Code" line too. This does NOT contradict the global rule that keeps that trailer on every commit: that rule is scoped to **company repos**, where it exists so the company can measure Claude-assisted work. This is a personal, public repo committed as `mahsanamin <mahsanamin@gmail.com>`, in the same spirit as the public mirrors that deliberately carry no Claude trace. It also overrides the harness default that appends the trailer. In a company repo, keep the trailer.
+
 ---
 
 ## The source-of-truth model (skills & agents)
