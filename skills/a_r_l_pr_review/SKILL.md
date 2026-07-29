@@ -57,12 +57,46 @@ For each PR number `N`:
 1. **Create (recreate if it exists).** Run `a_g_worktree_review <N>`. If it reports the `review-pr-<N>` worktree/branch already exists, remove it with `a_g_worktree_remove review-pr-<N> --force` and run `a_g_worktree_review <N>` again so you start from a fresh checkout of the latest PR head.
 2. **Recover on failure.** If the helper fails, diagnose and recover on your own (e.g. `cd` into `…/WorkTrees/<project>/review-pr-<N>` directly). Always confirm you are inside the right worktree and on the right branch before reviewing.
 3. **Verify before reviewing.** Pull the PR's branches with `gh pr view <N> --json headRefName,baseRefName` and print four things: current worktree path, current branch (`review-pr-<N>`), the PR **head** (`headRefName`, must equal what the worktree checked out), and the PR **base** (`baseRefName`, the branch it will merge into). The worktree HEAD must be the PR head; the base is the merge target the review compares against. If head doesn't match, fix it before proceeding.
-4. **Review — from inside the worktree.** `cd` into `…/WorkTrees/<project>/review-pr-<N>`, then run `review_skill` (default `/review-pr <N>`). It will run `gh pr diff <N>` (head-vs-base) itself and read the full source files from this worktree, so the review reflects the PR code on its merge base. Do not compute the diff or pick a base yourself. It produces a draft (file path under the reviews root).
-5. **Post (mode-dependent).**
+4. **Announce that the review started (`post=auto` only).** Post the review-started comment on PR `N` before any code is read. See **Review-started announcement**. Never let this step block the review: if the post fails, note it and continue to step 5.
+5. **Review — from inside the worktree.** `cd` into `…/WorkTrees/<project>/review-pr-<N>`, then run `review_skill` (default `/review-pr <N>`). It will run `gh pr diff <N>` (head-vs-base) itself and read the full source files from this worktree, so the review reflects the PR code on its merge base. Do not compute the diff or pick a base yourself. It produces a draft (file path under the reviews root).
+6. **Post (mode-dependent).**
    - `post=draft`: post nothing. Record the draft path and what it contained.
    - `post=auto`: from the draft, take the comments marked **Action: Post** whose type is Bug/Error, Security, Missing, or a correctness-affecting Question. Run the self-verify + dedup guard (Auto-post policy). Post the survivors as one batch review on PR `N` via `/review-pr`'s own posting step (`gh api repos/{owner}/{repo}/pulls/<N>/reviews`). Then **verify** they landed (see Target). A clean PR with zero bar-clearing comments posts nothing — that is success, not failure.
-6. **Approve when clean (`post=auto` only).** Apply the **Auto-approve policy**: if nothing cleared the bar, there is no open question, all automated reviews (CodeRabbit, SonarQube) and required checks are finished and green, and confidence is high — `gh pr review <N> --approve` and verify it landed. If any of those fail, do not approve; stop and report why. `post=draft` never approves.
-7. **Tear down (only if `cleanup` and only what this run created).** Once the review (and any posting) for `N` is complete and its output is captured, remove the review worktree: `a_g_worktree_remove review-pr-<N> --force`. See Teardown safety.
+7. **Approve when clean (`post=auto` only).** Apply the **Auto-approve policy**: if nothing cleared the bar, there is no open question, all automated reviews (CodeRabbit, SonarQube) and required checks are finished and green, and confidence is high — `gh pr review <N> --approve` and verify it landed. If any of those fail, do not approve; stop and report why. `post=draft` never approves.
+8. **Tear down (only if `cleanup` and only what this run created).** Once the review (and any posting) for `N` is complete and its output is captured, remove the review worktree: `a_g_worktree_remove review-pr-<N> --force`. See Teardown safety.
+
+## Review-started announcement (`post=auto` only)
+
+Post ONE top-level comment on the PR saying the review has started, **before** reading any code. A teammate asked for this: from the outside, a silent review is indistinguishable from no review, so the author does not know whether to wait or to keep pushing. Treat it as part of the review contract, not optional politeness.
+
+**When:** in step 4, right after head/base are verified and the worktree is confirmed, and before `review_skill` runs. The point is to claim the review early, so posting it after the findings defeats the purpose.
+
+**Rules:**
+- **Mode-gated.** `post=auto` posts it. `post=draft` does **not**: a dry run must leave no trace on the PR.
+- **Name the agent when one is defined.** If the global rules (`~/.claude/CLAUDE.md`) define an agent identity for this machine, name it in the comment, using whatever display form those rules specify. If no agent name is defined, post the same comment without one. Never invent a name and never guess a machine/unit suffix: read it from the global rules or leave it out.
+- **Keep Claude attribution.** The agent name labels the configured setup; it never replaces the fact that this is Claude Code. Both appear.
+- **Idempotent per head SHA.** Before posting, read the PR's existing issue comments (`gh api repos/{owner}/{repo}/issues/<N>/comments`) and skip if a review-started comment for the **current head SHA** is already there. Re-reviewing a **new** head SHA does post a fresh one, so a force-push gets its own announcement.
+- **Best-effort, never blocking.** If the post fails, record it in the report and carry on with the review. A failed announcement is not a failed review.
+- **One per PR per run.** Do not repeat it per finding or per file.
+
+**Shape** (two lines, and include the short head SHA so a later re-review is distinguishable):
+
+```bash
+HEAD_SHA="$(gh pr view <N> --json headRefOid --jq '.headRefOid[0:7]')"
+gh api "repos/{owner}/{repo}/issues/<N>/comments" -f body="🔍 Review started by **<AGENT-NAME>** (Claude Code) on \`$HEAD_SHA\`.
+Anything that needs action will land as inline comments; a clean pass posts nothing."
+```
+
+With no agent name defined, drop the `by **...**` clause and keep the rest identical:
+
+```
+🔍 Review started (Claude Code) on `<short-sha>`.
+Anything that needs action will land as inline comments; a clean pass posts nothing.
+```
+
+The second line matters: without it, a review that finds nothing looks like a review that never finished.
+
+**Note on the naming rule.** If the global rules otherwise say to keep the agent name out of PR bodies (because an unexplained third-party name confuses reviewers), this step is a deliberate exception: here the name **is** the payload (it tells the author which agent claimed their PR), not an unexplained aside, and Claude Code is named alongside it.
 
 ## Auto-post policy (`post=auto`)
 
@@ -101,17 +135,18 @@ Treat this as the routine's goal and verify it for **every** requested PR before
 
 For each PR `N`:
 1. **Reviewed:** the worktree was created, its HEAD matched the live PR head SHA (`gh pr view <N> --json headRefOid`), the review ran, and a draft exists.
-2. **Posting matches the mode:**
+2. **Announced (`post=auto`):** the review-started comment is present on the PR for the current head SHA (either this run posted it, or it was already there from an earlier run on the same head). If the post failed, say so. `post=draft` must have posted nothing.
+3. **Posting matches the mode:**
    - `post=draft`: nothing posted; the draft path is reported. ✓
    - `post=auto`: **every** comment that cleared the bar was actually posted. **Verify, do not assume:** after posting, re-fetch `gh api repos/{owner}/{repo}/pulls/<N>/comments` and confirm each intended comment is present. Report the posted count. If a qualifying comment failed to post (API error, etc.), retry once; if it still fails, the target is **NOT met** for that PR — say so explicitly with the unposted comment(s). Never silently drop a bar-clearing comment.
    - **Approval (`post=auto`):** if the Auto-approve policy's conditions were all met, the PR was approved and the approval was verified present (`gh pr view <N> --json reviews`); if any condition failed, no approval was made and the report says which condition held it back. State which path was taken.
-3. **No collateral:** the worktree was torn down (if `cleanup`), and the **main checkout is untouched** (same branch/HEAD it started on). Confirm and state this.
+4. **No collateral:** the worktree was torn down (if `cleanup`), and the **main checkout is untouched** (same branch/HEAD it started on). Confirm and state this.
 
 If any PR's target is not met, the run is not done: surface exactly which PR and which sub-check failed. A PR with zero bar-clearing comments meets the target with zero posts — that is success.
 
 ## Report
 
-End with a per-PR summary: PR number + title; worktree path and branch; head and base (merge target) compared; the `post` mode; **comments posted (count + which) or "draft only"**, with the draft file path; whether the worktree was recreated and torn down; and the **target status per PR (met / not met + why)**. State explicitly that the main checkout is unchanged. Note any PR you could not position correctly.
+End with a per-PR summary: PR number + title; worktree path and branch; head and base (merge target) compared; the `post` mode; whether the **review-started comment** was posted (or already present, or skipped because `post=draft`, or failed); **comments posted (count + which) or "draft only"**, with the draft file path; whether the worktree was recreated and torn down; and the **target status per PR (met / not met + why)**. State explicitly that the main checkout is unchanged. Note any PR you could not position correctly.
 
 ## Run logging (visibility)
 

@@ -7,13 +7,13 @@ description: Review a GitHub PR end-to-end from just its URL. Give it a PR link 
 
 One entry point: hand it a PR URL and it does the whole thing. It owns **getting the right code onto disk with zero duplication** and the **posting + cleanup**; it delegates the **review itself** to an existing reviewer skill. Do not reinvent the review engine, the repo-resolution logic, or the worktree layout — each already exists and is reused here.
 
-> **From a terminal (no need to open Claude first):** the command `a_c_review_pr <pr-url>` does the mechanical setup — resolve the repo, make the worktree on the head branch — and then launches a Claude session in auto mode whose opening prompt runs *this* review policy. When invoked that way you are told "you are already in the worktree" — so skip step 2/4 (resolve + create) and go straight to the review + post; the command handles teardown.
+> **From a terminal (no need to open Claude first):** the command `a_c_review_pr <pr-url>` does the mechanical setup — resolve the repo, make the worktree on the head branch — and then launches a Claude session in auto mode whose opening prompt runs *this* review policy. When invoked that way you are told "you are already in the worktree" — so skip step 2/4 (resolve + create) and go straight to step 4b (announce), then the review + post; the command handles teardown.
 
 ## What this reuses (do not duplicate)
 
 - **Repo resolution + cache:** the `a_s_resolve_repo` script (in `my_setup/scripts/`, on PATH). It turns a PR/repo reference into a local clone path via cache → `cd_w` workspace scan (match by git remote) → clone into `cd_w`. It is the single source of truth for "which local clone is this PR's repo" and for avoiding duplicate clones.
 - **The review engine:** the project's `review-pr` skill, or the global `global-pr-reviewer`. These produce the categorized review draft (diff, rules, reviewer agent, GitHub-style inline comments). This skill never re-implements the diff or the review.
-- **Auto-post policy, self-verify guard, and teardown-safety rules:** identical to `a_r_l_pr_review` (`skills/a_r_l_pr_review/SKILL.md`). Read that skill's **Auto-post policy** and **Teardown safety** sections and apply them verbatim — they are restated compactly below, not forked.
+- **Review-started announcement, auto-post policy, self-verify guard, and teardown-safety rules:** identical to `a_r_l_pr_review` (`skills/a_r_l_pr_review/SKILL.md`). Read that skill's **Review-started announcement**, **Auto-post policy**, and **Teardown safety** sections and apply them verbatim — they are restated compactly below, not forked.
 
 ## Inputs
 
@@ -60,6 +60,20 @@ Worktrees live beside the main repo, matching the layout used everywhere else:
   - `git fetch origin "pull/$N/head"` then `LOCAL_BR="pr-$N-review"`, `git worktree add -b "$LOCAL_BR" "$WT" FETCH_HEAD`. Note in the report that fixes can't be pushed back to the fork from here.
 - **Verify before reviewing:** print the worktree path, the checked-out branch, and confirm `git -C "$WT" rev-parse HEAD` equals `headRefOid`. If it doesn't, fetch again / fix before proceeding. `cd "$WT"`.
 
+### 4b. Announce that the review has started (`post=auto` only)
+Apply `a_r_l_pr_review`'s **Review-started announcement** verbatim. Compactly: before any code is read, post ONE top-level comment so the author knows a review is underway (a teammate asked for this; a silent review looks like no review). Name the machine's agent identity if the global rules (`~/.claude/CLAUDE.md`) define one, and always name Claude Code alongside it; if no agent name is defined, post the same comment without one and never invent one.
+
+```bash
+HEAD_SHA="$(gh pr view <N> --json headRefOid --jq '.headRefOid[0:7]')"
+gh api "repos/{OWNER}/{REPO}/issues/<N>/comments" -f body="🔍 Review started by **<AGENT-NAME>** (Claude Code) on \`$HEAD_SHA\`.
+Anything that needs action will land as inline comments; a clean pass posts nothing."
+```
+
+- **Idempotent per head SHA:** check `gh api repos/{OWNER}/{REPO}/issues/<N>/comments` first and skip if one is already there for the current head. A force-push (new head SHA) gets a fresh announcement.
+- **`post=draft` posts nothing here:** a dry run leaves no trace on the PR.
+- **Best-effort:** if it fails, note it and review anyway. This step must never block the review.
+- This runs even on the `a_c_review_pr` path where steps 2 and 4 are skipped, since the worktree already exists there.
+
 ### 5. Pick the reviewer and run it (from inside the worktree)
 - `reviewer=auto`: if `"$REPO_PATH/.claude/skills/review-pr/SKILL.md"` exists → use the **project** reviewer: `/review-pr <N>`. Else → use the **global** reviewer: `global-pr-reviewer <PR-URL>`. (`global-pr-reviewer` is installed globally and is itself project-aware, so it is a safe fallback; it must never be re-created — per this repo's rules `aa-*` skills belong to the upstream framework, not here.)
 - If the project reviewer's skill is present on disk but not invocable in this session, fall back to the global reviewer rather than failing.
@@ -92,10 +106,11 @@ git branch -D "$LOCAL_BR"             # LOCAL branch only
 
 ## Target (done-when) — self-check before concluding
 1. **Right code:** `REPO_PATH` is your existing clone (no duplicate was made — or a clone was made only because you truly lacked one), and the worktree HEAD matched `headRefOid`.
-2. **Reviewed:** the chosen reviewer ran against the worktree and produced a draft.
-3. **Posting matches the mode:** `auto` → every bar-clearing comment was posted **and verified present** (retry once on failure; if it still fails, say which comment didn't post — never silently drop it). `draft` → nothing posted, draft path reported.
-4. **Approval decided (`post=auto`):** either the PR was approved (Auto-approve policy's conditions all met) and the approval was verified present, or it was intentionally held (state which condition — a question, a pending/red check, or low confidence — held it back). `draft` never approves.
-5. **Cleaned up:** worktree removed, local review branch deleted, **remote branch untouched**, main checkout unchanged. State this explicitly.
+2. **Announced (`post=auto`):** the review-started comment is present on the PR for the current head SHA (posted by this run, or already there from an earlier run on the same head). Say so if the post failed. `draft` → nothing was posted.
+3. **Reviewed:** the chosen reviewer ran against the worktree and produced a draft.
+4. **Posting matches the mode:** `auto` → every bar-clearing comment was posted **and verified present** (retry once on failure; if it still fails, say which comment didn't post — never silently drop it). `draft` → nothing posted, draft path reported.
+5. **Approval decided (`post=auto`):** either the PR was approved (Auto-approve policy's conditions all met) and the approval was verified present, or it was intentionally held (state which condition — a question, a pending/red check, or low confidence — held it back). `draft` never approves.
+6. **Cleaned up:** worktree removed, local review branch deleted, **remote branch untouched**, main checkout unchanged. State this explicitly.
 
 ## Report
-End with: PR number + title + URL; resolved repo path and whether it came from cache / workspace / a fresh clone; head branch and base (merge target); worktree path + local branch; which reviewer ran (project vs global); comments posted (count + which) or "draft only" with the draft path; **whether the PR was approved or held (and why held)**; and the **target status (met / not met + why)**. Confirm the remote branch and main checkout are untouched.
+End with: PR number + title + URL; resolved repo path and whether it came from cache / workspace / a fresh clone; head branch and base (merge target); worktree path + local branch; which reviewer ran (project vs global); whether the **review-started comment** was posted (or already present, skipped for `draft`, or failed); comments posted (count + which) or "draft only" with the draft path; **whether the PR was approved or held (and why held)**; and the **target status (met / not met + why)**. Confirm the remote branch and main checkout are untouched.
