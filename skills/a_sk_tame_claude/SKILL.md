@@ -130,6 +130,25 @@ left alone.
 This file loads on every request, so length is a real cost. Most unmanaged ones are long because
 knowledge was written where rules belong.
 
+**Sort first, then write to sources, not to the file.** The end state for this file is
+*generated*: `a_c_claude_memory` composes a managed region from sources in git. So the output of
+this phase is edits to those sources plus one `a_c_claude_memory build` — not a hand-edited
+`~/.claude/CLAUDE.md`, which the next build would overwrite anyway.
+
+| A rule that is... | Goes to |
+|---|---|
+| generic to any machine running the devkit | `agentic-devkit/memory/core-rules.md` |
+| personal, always-on | `<overlay>/machine/rules.md` |
+| about this machine (name, role, what runs here) | `<overlay>/machine/<A_MACHINE_NAME>.md` |
+| a term whose meaning implies an action | `<overlay>/machine/glossary.md` |
+
+Then `a_c_claude_memory diff`, show it, and `build`. Hand-written text outside the markers is
+preserved, so anything you have not routed yet survives the transition — but say what is left
+unrouted rather than leaving it silently.
+
+If the machine has no overlay, the sorting below still applies; park personal rules in the
+hand-written zone and offer to create an overlay (phase 3).
+
 Read it line by line and sort every paragraph:
 
 | Kind | Example | Where it goes |

@@ -17,8 +17,8 @@ export a_company_name=''
 export a_dir_p_repos='/path/to/personal/repos'
 export a_dir_w_repos='/path/to/work/repos'
 
-# Where this repo (my_setup) is cloned
-export MY_WORKFLOW_DIR="${a_dir_p_repos}/my_setup"
+# Where this repo (agentic-devkit) is cloned
+export MY_WORKFLOW_DIR="${a_dir_p_repos}/agentic-devkit"
 
 ########################### Agentic Machine Identity ####
 # This machine's name, as Claude should introduce it. Pick something distinctive;

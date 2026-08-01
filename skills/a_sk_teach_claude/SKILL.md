@@ -71,10 +71,21 @@ Run the decision from `docs/managed-claude.md`:
 | The item is | Goes to | Form |
 |---|---|---|
 | A fact about a project, person, decision, or mapping | **private brain** | a line or short section in the right folder |
-| A one-line behavior Claude should always follow | **global `~/.claude/CLAUDE.md`** | one or two lines under an existing heading |
+| A term of the user's whose meaning implies an action | **`<overlay>/machine/glossary.md`** | one row: term, what it is, what to do |
+| A fact about *this machine* (role, what runs here, a gotcha) | **`<overlay>/machine/<A_MACHINE_NAME>.md`** | a line under the right heading |
+| A one-line behavior, personal | **`<overlay>/machine/rules.md`** | one or two lines under an existing heading |
+| A one-line behavior, generic to any machine | **`agentic-devkit/memory/core-rules.md`** | one or two lines under an existing heading |
 | A multi-step procedure, work-specific | **org overlay** | a new or edited skill/agent |
 | A multi-step procedure, generic | **agentic-devkit** | a new or edited skill/agent |
 | Anything else | **nowhere** | say you dropped it, and why |
+
+**Never edit `~/.claude/CLAUDE.md` directly.** It is generated from the sources above; the next
+`a_c_claude_memory build` overwrites anything written into the managed region. After writing to
+a source, run `a_c_claude_memory build` so the change is live, and say that you did.
+
+**The glossary row is the most under-used option.** If you picked the wrong tool this session
+and were corrected, that is not a rule and not a brain fact — it is a missing glossary row.
+Prefer it whenever the lesson is "when I say X, you should reach for Y".
 
 Two rules that decide most of the hard cases:
 
@@ -113,9 +124,15 @@ Write brain files with the tools you normally use for that brain. If the brain i
 repo, edit files directly. If it is served through a notes CLI, use the safe-write path for that
 CLI rather than piping markdown through a shell.
 
-**Into the global `CLAUDE.md`.** Add to an existing heading; do not create a new one for a single
-line. Keep it to one or two lines. Before finishing, re-read the section you touched and check it
-does not now contradict a line above or below it.
+**Into a memory source** (`memory/core-rules.md`, `machine/rules.md`, `machine/<name>.md`, or
+`machine/glossary.md`). Add to an existing heading; do not create a new one for a single line.
+Keep it to one or two lines — a glossary row is exactly one. Before finishing, re-read the
+section you touched and check it does not now contradict a line above or below it. Then:
+
+```bash
+a_c_claude_memory diff    # confirm only your change moved
+a_c_claude_memory build   # make it live
+```
 
 **Into a skill or agent.** Follow the repo's conventions: `a_sk_<name>` for a skill, `a_r_<name>`
 or `a_r_l_<name>` for a routine, `a_sag_<name>` for a subagent, frontmatter `name:` matching the

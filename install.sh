@@ -154,14 +154,23 @@ main() {
 
     say "\n${GREEN}Done.${NC} ${DIM}Skills + agents linked from $REPO_ROOT.${NC}"
 
-    # The rules file is the one thing an installer must not rewrite behind your back:
-    # it is loaded on every request and may be entirely hand-written. Point at the
-    # command instead, which shows a diff first and never touches text outside its markers.
-    if ! $DRY_RUN && [ -n "${A_MACHINE_NAME:-}" ] && ! grep -qs 'agentic-devkit: managed memory' "$HOME/.claude/CLAUDE.md"; then
-        say ""
-        say "${YELLOW}Your global rules file is not managed yet.${NC}"
-        say "    ${GREEN}a_c_claude_memory diff${NC}   ${DIM}see what it would add${NC}"
-        say "    ${GREEN}a_c_claude_memory build${NC}  ${DIM}adopt it (your hand-written text is kept)${NC}"
+    # Global memory. Two cases, and the difference matters:
+    #  - Already adopted (the markers are there): a pull can change memory/core-rules.md,
+    #    so rebuild, or the rules file silently goes stale. This is the whole point of
+    #    re-running install.sh after a pull.
+    #  - Not adopted yet: never rewrite a hand-written rules file behind someone's back.
+    #    Point at the command, which shows a diff first.
+    if ! $DRY_RUN && command -v a_c_claude_memory > /dev/null 2>&1; then
+        if grep -qs 'agentic-devkit: managed memory' "$HOME/.claude/CLAUDE.md"; then
+            say ""
+            say "${BLUE}Global memory${NC}"
+            a_c_claude_memory build 2>&1 | sed 's/^/  /'
+        elif [ -n "${A_MACHINE_NAME:-}" ]; then
+            say ""
+            say "${YELLOW}Your global rules file is not managed yet.${NC}"
+            say "    ${GREEN}a_c_claude_memory diff${NC}   ${DIM}see what it would add${NC}"
+            say "    ${GREEN}a_c_claude_memory build${NC}  ${DIM}adopt it (your hand-written text is kept)${NC}"
+        fi
     fi
     if $DRY_RUN; then
         :

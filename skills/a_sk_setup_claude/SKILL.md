@@ -94,36 +94,34 @@ on.
 
 ## Step 4 — teach the global CLAUDE.md what it now has
 
-The installer links files. It does not tell Claude they exist. Add one short block to
-`~/.claude/CLAUDE.md` between markers so it can be updated or removed cleanly later.
+The installer links files. It does not tell Claude they exist. **Do not hand-write that block.**
+`a_c_claude_memory` owns the global rules file now: it composes the managed region from sources
+in git (`memory/core-rules.md` here, plus machine identity / personal rules / glossary from a
+private overlay). An older version of this skill wrote a `agentic-devkit hint` block by hand;
+the build absorbs and removes it.
 
-Rules for this block:
-
-- **Between markers.** Start `<!-- >>> agentic-devkit hint >>> -->`, end
-  `<!-- <<< agentic-devkit hint <<< -->`. If the markers already exist, replace what is between
-  them. Never append a second copy.
-- **Short.** This file loads on every single request. Aim for under 20 lines. Point at repo docs
-  for detail rather than inlining it.
-- **Never touch anything outside the markers.** The rest of that file is hand-written and is the
-  user's, including any other tool's managed block.
-
-Write something of this shape, with the real path substituted:
-
-```markdown
-<!-- >>> agentic-devkit hint >>> -->
-## agentic-devkit is installed on this machine
-
-Skills and subagents in `~/.claude/` are **symlinks** into `<REPO_PATH>`. Edit and commit
-there, never through the link and never as a copy in `~/.claude/`.
-
-- Skill catalog: `<REPO_PATH>/skills/README.md` · Agent catalog: `<REPO_PATH>/agents/README.md`
-- Naming: `a_sk_*` on-demand skill · `a_r_*` routine · `a_sag_*` subagent · `a_c_*` command ·
-  `a_g_*` git command. `_l_` after the kind means it must run locally.
-- Shell commands from this repo are on PATH via `MY_WORKFLOW_DIR`.
-- Re-run `<REPO_PATH>/install.sh` after a `git pull` to pick up new skills/agents.
-- Health check + repair: `a_sk_tame_claude`. Record what was learned: `a_sk_teach_claude`.
-<!-- <<< agentic-devkit hint <<< -->
+```bash
+a_c_claude_memory status   # sources found, region present, in sync?
+a_c_claude_memory diff     # exactly what the build would add or change
+a_c_claude_memory build    # write it
 ```
+
+Rules that still matter, and that the command enforces for you:
+
+- **Show the diff before the first build.** Adopting an existing hand-written rules file keeps
+  that text verbatim below the generated region, but the user should see it, not be told.
+- **Never touch anything outside the markers.** Everything outside is hand-written and theirs,
+  including another tool's managed block.
+- **Short.** This file loads on every single request. Anything long belongs in a repo doc or the
+  brain, reached by a pointer.
+
+If the machine has no overlay yet, the build still works — it renders the core rules and the
+pointers. Offer the overlay in step 6, then rebuild so the machine gets an identity and a
+glossary.
+
+To give this machine a name it can introduce itself with, set `A_MACHINE_NAME`,
+`A_CLAUDE_OVERLAY_DIR`, and `A_CLAUDE_BRAIN_DIR` in `~/my_settings/configs.profile`, then create
+`<overlay>/machine/<A_MACHINE_NAME>.md`. See `docs/managed-claude.md`.
 
 ## Step 5 — make the agents actually reachable
 

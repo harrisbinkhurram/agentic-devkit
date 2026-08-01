@@ -35,6 +35,7 @@ OLD_END='<!-- <<< agentic-devkit hint <<< -->'
 
 TARGET="${CLAUDE_MEMORY_FILE:-$HOME/.claude/CLAUDE.md}"
 DRY_RUN=0
+FORCE=0
 CMD=""
 
 if [ -t 1 ]; then
@@ -49,6 +50,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     build|diff|status|check|render) CMD="$1"; shift ;;
     -n|--dry-run) DRY_RUN=1; shift ;;
+    -F|--force) FORCE=1; shift ;;
     -f|--file) TARGET="${2:-}"; [ -n "$TARGET" ] || die "-f needs a path"; shift 2 ;;
     -h|--help) sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown argument: $1 (try --help)" ;;
@@ -144,6 +146,48 @@ strip_frontmatter() {
   awk 'NR==1 && $0=="---" {fm=1; next} fm && $0=="---" {fm=0; next} !fm {print}' "$1"
 }
 
+# --- safety: never silently shrink ----------------------------------------------
+#
+# The region header records the sources it was built from. If a source that was
+# used last time is missing from the config now but STILL EXISTS ON DISK, the
+# environment is wrong - almost always a shell that has not sourced the profile,
+# so A_CLAUDE_OVERLAY_DIR is unset. Rebuilding there would quietly delete the
+# machine, rules, and glossary blocks from a file that loads on every request.
+# Refuse. A source that is genuinely gone from disk is a real removal; allow it.
+
+previous_sources() {
+  [ -f "$TARGET" ] || return 0
+  awk -v b="$BEGIN_MARK" '
+    $0==b {inr=1; next}
+    inr && $0=="-->" {exit}
+    inr && ($1=="core"||$1=="machine"||$1=="rules"||$1=="glossary") && substr($2,1,1)=="/" {print $2}
+  ' "$TARGET"
+}
+
+guard_shrink() {
+  local current=" $CORE $MACHINE_FILE $RULES_FILE $GLOSSARY_FILE " lost=0 old
+  while IFS= read -r old; do
+    [ -n "$old" ] || continue
+    case "$current" in *" $old "*) continue ;; esac
+    [ -e "$old" ] || continue   # really gone: a legitimate removal
+    if [ "$lost" -eq 0 ]; then
+      echo "${RED}refusing to rebuild:${R} this would drop a block that is in your rules file now." >&2
+      echo "These sources exist on disk but are not configured in this shell:" >&2
+      lost=1
+    fi
+    echo "    $old" >&2
+  done <<EOF
+$(previous_sources)
+EOF
+  [ "$lost" -eq 0 ] && return 0
+  echo "" >&2
+  echo "Usually this means the shell has not sourced your profile, so" >&2
+  echo "A_CLAUDE_OVERLAY_DIR / A_MACHINE_NAME are unset. Fix that and re-run:" >&2
+  echo "    source ~/.zshrc && a_c_claude_memory build" >&2
+  echo "If you really meant to drop those blocks: a_c_claude_memory build --force" >&2
+  return 1
+}
+
 # --- assemble the whole file ---------------------------------------------------
 
 # Drop the superseded hint block, if a previous a_sk_setup_claude run left one.
@@ -191,6 +235,7 @@ case "$CMD" in
     ;;
 
   build)
+    [ "$FORCE" -eq 1 ] || guard_shrink || exit 1
     tmp="$(build_file)"
     if [ -f "$TARGET" ] && cmp -s "$tmp" "$TARGET"; then
       echo "${G}up to date${R} ${D}$TARGET${R}"
