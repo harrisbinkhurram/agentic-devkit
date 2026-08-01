@@ -42,6 +42,7 @@ A personal, **project-agnostic** library of Claude Code sub-agents. Every agent 
 | `a_sag_design_spec_extractor` | sonnet | Design reference into implementation-ready UI spec mapped to project tokens/assets |
 | `a_sag_verification_step_generator` | sonnet | Ticket into a numbered, API-first verification checklist |
 | `a_sag_prompt_engineer` | sonnet | Write/optimize prompts, agent/skill instructions, tool descriptions |
+| `a_sag_repo_pitch` | sonnet | Rewrite a repo's README/landing page for first-time clarity, ship as a PR |
 
 ### Autonomous-build harness (Plan, Build, Review, Merge)
 | Agent | Model | Role |
