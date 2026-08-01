@@ -56,7 +56,7 @@ flowchart TD
 
 | Layer | Repo | Visibility | Holds |
 |---|---|---|---|
-| Rules | `~/.claude/CLAUDE.md` | on the machine | the short, always-loaded rules; points at everything else |
+| Rules | `~/.claude/CLAUDE.md` | **generated** from repo sources | the short, always-loaded rules; points at everything else |
 | Core capability | **agentic-devkit** (this repo) | public | generic skills, agents, shell, tools |
 | Org capability | your work overlay | private | work-only skills/agents, org profile |
 | Personal capability | your personal overlay | private | personal-life skills |
@@ -86,6 +86,54 @@ core and a thin work-specific front in the overlay.
 **Guard it.** Put a pre-commit hook on the public repo that greps for your employer's names,
 domains, package prefixes, and project code names, and blocks the commit on a hit. A leak into a
 public repo is not something you want to discover later.
+
+## The rules file is generated, not hand-written
+
+`~/.claude/CLAUDE.md` loads on **every single request**, and on most machines it is the one file
+that is hand-typed and version-controlled nowhere. Skills and agents survive a laptop swap; the
+rules do not. That is the last unmanaged thing in an otherwise managed setup.
+
+`a_c_claude_memory` fixes it by composing the file from sources that do live in git:
+
+| Block | Source | Layer |
+|---|---|---|
+| core rules | `agentic-devkit/memory/core-rules.md` | core (public, generic) |
+| machine identity | `<overlay>/machine/<A_MACHINE_NAME>.md` | overlay (private) |
+| personal rules | `<overlay>/machine/rules.md` | overlay (private) |
+| glossary | `<overlay>/machine/glossary.md` | overlay (private) |
+| pointers | generated from the configured repo paths | — |
+
+```bash
+a_c_claude_memory status   # sources found, region present, in sync?
+a_c_claude_memory diff     # what a build would change
+a_c_claude_memory build    # regenerate the managed region in place
+a_c_claude_memory check    # exit 1 on drift (used by a_c_workflow_doctor)
+```
+
+Everything it writes sits between `agentic-devkit: managed memory` markers. **Text outside the
+markers is never touched** — adopting an existing hand-written file keeps that file, verbatim,
+below the generated region. Three variables in `configs.profile` drive it: `A_MACHINE_NAME`,
+`A_CLAUDE_OVERLAY_DIR`, `A_CLAUDE_BRAIN_DIR`. With none of them set you still get a valid file
+from the core rules alone.
+
+### Machine identity
+
+A machine that runs unattended work needs a name it can introduce itself with, a stated role,
+and explicit limits on what it may do without being asked. That is `machine/<name>.md` in the
+overlay: the name (which need not be the hostname), what lives on the box, which volumes must be
+mounted, which git identity to commit as, and what a scheduled routine is allowed to touch.
+
+Name it distinctly. "Which machine am I on" should never be answered by inference.
+
+### The glossary
+
+The highest-leverage block. A table of *the user's shorthand* mapped to the concrete thing:
+which repo, which skill, which command, which path. It is loaded on every request, so a term in
+it is resolved instead of searched for, and the right tool gets picked instead of improvised.
+
+Keep rows to one line and keep it a routing table, not documentation — the long version goes in
+the brain with a pointer from the glossary. It grows from corrections: every time the wrong tool
+was picked, that is a missing row.
 
 ## The private brain
 

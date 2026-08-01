@@ -162,6 +162,28 @@ a_c_workflow_doctor() {
         fi
     fi
 
+    echo ""
+    echo -e "${BLUE}Agentic machine:${NC}"
+    if [ -z "${A_MACHINE_NAME:-}" ]; then
+        _doc_warn "A_MACHINE_NAME is not set — this machine has no identity to introduce itself with"
+    else
+        _doc_ok "machine identity: $A_MACHINE_NAME"
+    fi
+    if command -v a_c_claude_memory > /dev/null 2>&1; then
+        if a_c_claude_memory check > /dev/null 2>&1; then
+            _doc_ok "global memory in sync with its sources"
+        else
+            _doc_warn "global memory has drifted — run: a_c_claude_memory build"
+        fi
+    fi
+    local unmanaged
+    unmanaged=$(find ~/.claude/skills ~/.claude/agents -mindepth 1 -maxdepth 1 ! -type l 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${unmanaged:-0}" -gt 0 ]; then
+        _doc_warn "$unmanaged unmanaged (non-symlink) item(s) in ~/.claude — run a_sk_tame_claude"
+    else
+        _doc_ok "every skill and agent in ~/.claude is a managed symlink"
+    fi
+
     echo "─────────────────────────────────────────────────────────────"
     echo -e "${GREEN}$ok ok${NC}  ${YELLOW}$warn warn${NC}  ${RED}$err err${NC}"
     unset -f _doc_ok _doc_warn _doc_err

@@ -130,6 +130,7 @@ my_setup/
 ├── scripts/      # standalone scripts on PATH: a_c_* (commands), a_g_* (git/worktree/branch), a_s_* (helpers)
 ├── skills/       # SOURCE OF TRUTH for Claude skills - one dir per skill, symlinked into ~/.claude/skills
 ├── agents/       # SOURCE OF TRUTH for Claude subagents - one .md per agent, symlinked into ~/.claude/agents
+├── memory/       # SOURCE for the generated global ~/.claude/CLAUDE.md (core-rules.md); see a_c_claude_memory
 ├── rules/        # shared rule files (e.g. mdnest.md), imported into global CLAUDE.md and read by agents
 ├── tools/        # self-contained tools (slack-summarizer, mdcf)
 └── docs/         # worktree.md, mac.md, task.md
@@ -144,6 +145,8 @@ my_setup/
 **A skill** - create `skills/<name>/SKILL.md` (frontmatter `name:` must equal the dir name). Use `a_sk_<name>` for an on-demand skill, or `a_r_<name>` / `a_r_l_<name>` for a routine (`l_` only if it cannot run in the cloud). Run `a_c_skills install <name>`, then commit.
 
 **An agent** - create `agents/<name>.md` (`a_sag_` prefix, generic and project-agnostic; see `agents/README.md` for the house conventions). Run `a_c_agents install <name>`, then commit.
+
+**An always-on rule, a machine fact, or a glossary term** - do NOT hand-edit `~/.claude/CLAUDE.md`; it is generated. Edit the source and run `a_c_claude_memory build`. Generic rule -> `memory/core-rules.md` here. Personal rule, machine identity, or glossary row -> `machine/*.md` in the private overlay. The model is in `docs/managed-claude.md`.
 
 ---
 

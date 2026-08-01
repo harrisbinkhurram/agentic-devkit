@@ -153,6 +153,16 @@ main() {
     link_claude
 
     say "\n${GREEN}Done.${NC} ${DIM}Skills + agents linked from $REPO_ROOT.${NC}"
+
+    # The rules file is the one thing an installer must not rewrite behind your back:
+    # it is loaded on every request and may be entirely hand-written. Point at the
+    # command instead, which shows a diff first and never touches text outside its markers.
+    if ! $DRY_RUN && [ -n "${A_MACHINE_NAME:-}" ] && ! grep -qs 'agentic-devkit: managed memory' "$HOME/.claude/CLAUDE.md"; then
+        say ""
+        say "${YELLOW}Your global rules file is not managed yet.${NC}"
+        say "    ${GREEN}a_c_claude_memory diff${NC}   ${DIM}see what it would add${NC}"
+        say "    ${GREEN}a_c_claude_memory build${NC}  ${DIM}adopt it (your hand-written text is kept)${NC}"
+    fi
     if $DRY_RUN; then
         :
     elif [ -n "${MY_WORKFLOW_DIR:-}" ]; then
