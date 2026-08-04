@@ -68,7 +68,7 @@ PROJECTS_DIR = os.path.join(HOME, ".claude", "projects")
 UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I
 )
-DEFAULT_MDNEST_PATH = "@work/my_brain/Automations/Claude/RunningSessions.md"
+DEFAULT_MDNEST_PATH = "@mdnest/notes/Automations/Claude/RunningSessions.md"
 # A session whose transcript changed within this many seconds is "working now",
 # otherwise it is an open-but-idle session (process alive, waiting on input).
 ACTIVE_WINDOW_SECS = 180

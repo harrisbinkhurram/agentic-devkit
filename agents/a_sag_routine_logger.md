@@ -21,7 +21,7 @@ role and procedure. Prefer any path the caller hands you over the default.
 One file per routine per calendar month, under the routine's own `logs/` folder:
 
 ```
-@work/my_brain/MyAutomations/ClaudeRoutines/<routine>/logs/<YYYY-MM>.md
+@mdnest/notes/RoutineLogs/<routine>/logs/<YYYY-MM>.md
 ```
 
 `<routine>` is the caller's skill name (e.g. `a_r_l_dependabot_collector`).
@@ -41,7 +41,7 @@ continues without a log.
 1. Stamp the time and resolve the month file (UTC):
    - `NOW=$(date -u +"%Y-%m-%d %H:%M UTC")`
    - `MONTH=$(date -u +"%Y-%m")`
-   - `PATH_MD="@work/my_brain/MyAutomations/ClaudeRoutines/<routine>/logs/<MONTH>.md"`
+   - `PATH_MD="@mdnest/notes/RoutineLogs/<routine>/logs/<MONTH>.md"`
 2. Pick the glyph from `status`: `success`->`✅`, `partial`->`🟡`, `nothing-to-do`->`⚪`,
    `failed`->`❌`. If no status was given, use no glyph.
 3. Build the single line (this is the whole entry):

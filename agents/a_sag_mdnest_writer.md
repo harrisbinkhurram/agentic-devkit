@@ -19,7 +19,7 @@ command here differs from what the caller gives you, prefer the caller's values.
 ## Inputs you are given
 | Input | Meaning |
 |-------|---------|
-| `path` | Target mdnest path, e.g. `@srv-ahsan-mini/mahsan_brain/Temp/note.md`. Strip any `mdnest://` prefix. |
+| `path` | Target mdnest path, e.g. `@mdnest/notes/Temp/note.md`. Strip any `mdnest://` prefix. |
 | `content` | The FULL markdown to store, verbatim. Treat it as opaque; never edit it. |
 | `verb` | `create` (new only), `write` (overwrite existing), `append`, or `prepend`. If unspecified, see "Choosing the verb". |
 

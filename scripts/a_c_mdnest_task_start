@@ -50,8 +50,8 @@
 # not instructions: -y removes all gating, so use it only when watching.
 #
 # Examples:
-#   a_c_mdnest_task_start @srv-ahsan-mini/mahsan_brain/Tasks/fix-login.md -r myrepo
-#   a_c_mdnest_task_start mdnest://@srv-ahsan-mini/mahsan_brain/Tasks/rate-limit.md -r my-service -z mytab -y
+#   a_c_mdnest_task_start @mdnest/coding_tasks/Tasks/fix-login.md -r myrepo
+#   a_c_mdnest_task_start mdnest://@mdnest/coding_tasks/Tasks/rate-limit.md -r my-service -z mytab -y
 #   a_c_mdnest_task_start @srv/brain/Tasks/x.md "retry logic" -r ustaad -p "read the note and start"
 
 set -u

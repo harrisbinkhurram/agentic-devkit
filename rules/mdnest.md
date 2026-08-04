@@ -12,8 +12,8 @@ notes server. It is available. Use it. Do not claim a lack of access.
 - Discover servers and namespaces: `mdnest servers -v` (the `*` marks the default alias).
 - Quick reference: `mdnest --help`.
 - Path format: `@alias/namespace/path/to/file.md`.
-- A pasted URL like `mdnest://@srv-ahsan-mini/mahsan_brain/Temp/x.md` maps to the path
-  `@srv-ahsan-mini/mahsan_brain/Temp/x.md` (drop the `mdnest://`). Do not assume an
+- A pasted URL like `mdnest://@mdnest/notes/Temp/x.md` maps to the path
+  `@mdnest/notes/Temp/x.md` (drop the `mdnest://`). Do not assume an
   alias; read the one in the path, or run `mdnest servers -v` if none is given.
 
 ## Verbs
@@ -57,7 +57,7 @@ If verification fails, fix the temp file and `write` again; never leave a corrup
 ## Mermaid rules (always colorful, always readable, always valid)
 Goal: punchy, high-contrast diagrams whose roles read at a glance. The renderer used by
 mdnest computes readable text contrast per node, so group nodes by role and use distinct,
-saturated fills. Living palette: `@srv-ahsan-mini/mahsan_brain/MyProjects/mdNest/mermaid-style.md`
+saturated fills. Living palette: `@mdnest/notes/mdNest/mermaid-style.md`
 (mirrored below; keep in sync).
 
 - **Use `classDef` roles, then assign nodes** (do not hand-color each node):
@@ -100,7 +100,7 @@ unquoted is the gamble that breaks the render.
 
 ## Log unexpected mdnest problems
 Whenever mdnest behaves unexpectedly (an error, data loss, or inconsistent or surprising
-results), record one markdown file per bug in `@srv-ahsan-mini/mahsan_brain/MyProjects/mdNest/Bugs`
+results), record one markdown file per bug in `@mdnest/notes/mdNest/Bugs`
 (summary, repro steps, expected vs actual, impact, workaround). This is Ahsan's mdnest
 bug tracker. A corrupted write caused by our own escaping is NOT an mdnest bug; fix the
 procedure instead of filing it.
