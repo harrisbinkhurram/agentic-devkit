@@ -332,6 +332,15 @@ if [ $? -eq 0 ]; then
         echo -e "${GREEN}✓ Copied $DOTFILES_COPIED dotfile(s) to worktree${NC}"
     fi
 
+    # A worktree of a Unity repo is a full Unity project, but the Hub only
+    # learns about folders you add by hand. Register it so it shows up in the
+    # project list, titled with the branch name. The helper skips non-Unity
+    # worktrees, so this stays a no-op for every other kind of repo.
+    UNITY_HUB_HELPER="${MY_WORKFLOW_DIR:-$HOME/.claude}/scripts/a_s_unity_hub"
+    if [ -x "$UNITY_HUB_HELPER" ] && [ -f "$WORKTREE_PATH/ProjectSettings/ProjectVersion.txt" ]; then
+        "$UNITY_HUB_HELPER" add "$WORKTREE_PATH"
+    fi
+
     echo ""
 
     # Auto-cd if being sourced, otherwise provide instructions

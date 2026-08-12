@@ -95,6 +95,53 @@ both the slash and dash forms are accepted.
 **A worktree directory was deleted by hand.** Git still has it registered. Run
 `a_g_worktree_prune`, then `a_g_worktree_doctor` if anything still looks wrong.
 
+## Unity projects: worktrees show up in Unity Hub
+
+A git worktree of a Unity repo is a complete Unity project — it has `Assets/`, `Packages/` and
+`ProjectSettings/`. Unity Hub will happily open it, but it never discovers the folder on its own;
+normally you have to click **Add project from disk** for every worktree.
+
+`a_g_worktree_init` now does that step for you. After the worktree is created it calls
+[`scripts/a_s_unity_hub`](../scripts/a_s_unity_hub), which registers the project in Unity Hub's
+list. `a_g_worktree_remove` takes the entry back out. Both are no-ops on repos that are not Unity
+projects, so nothing changes for everyone else.
+
+The helper is also usable directly:
+
+```bash
+a_s_unity_hub add    ~/repos/WorkTrees/g-family_sort/carsort-glass-cover
+a_s_unity_hub remove ~/repos/WorkTrees/g-family_sort/carsort-glass-cover
+a_s_unity_hub sync                               # sweep this workspace's WorkTrees dir
+a_s_unity_hub sync   ~/repos/WorkTrees --prune   # ...and drop entries whose folder is gone
+a_s_unity_hub list
+```
+
+With no root, `sync` uses the `WorkTrees` directory belonging to the repo you are standing in —
+the sibling of its main checkout, which is where `a_g_worktree_init` puts worktrees. That works
+from inside a worktree too. Run it after anything that creates worktrees behind the helpers' back,
+such as `ar-taskflow` or `ar-taskflow-resume`.
+
+### Things worth knowing
+
+Unity Hub has no CLI for adding a project — its `--headless` interface only covers editors and
+install paths — so the helper edits the Hub's own project list at
+`~/Library/Application Support/UnityHub/projects-v1.json`, atomically, keeping a `.bak`.
+
+**The Hub reads that file only at launch** and rewrites it from memory afterwards. So a project
+added while the Hub is running appears the next time you open the Hub. Pass `--restart` to quit
+and reopen it right away; the quit happens *before* the write, because the Hub flushes its
+in-memory list on the way out and would otherwise overwrite the change.
+
+**The Hub names a project after its folder**, and re-derives that name at every launch for any
+entry it did not rename itself — an injected display name does not survive. That is fine in
+practice: a worktree folder is already the branch name with slashes turned into dashes, so
+`carsort/feature/glass-cover` shows up as `carsort-feature-glass-cover`. If you want a different
+name, rename the project inside the Hub. That sticks, and the helper never overwrites a title,
+favourite flag or build target you set there.
+
+For a worktree, the Unity cloud and organization fields are inherited from the main checkout's
+entry, so the Hub links the worktree to the same Unity project rather than treating it as a new one.
+
 ## Cleaning up in bulk
 
 `a_r_l_worktree_cleaner` sweeps a whole repo: it removes only the provably-done worktrees (branch

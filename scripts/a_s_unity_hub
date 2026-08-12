@@ -1,0 +1,336 @@
+#!/bin/bash
+# a_s_unity_hub — keep Unity Hub's project list in sync with git worktrees.
+#
+# Unity Hub has no CLI command to add a project (its --headless interface only
+# covers editors and install paths), so the project list is edited directly in
+#   ~/Library/Application Support/UnityHub/projects-v1.json
+#
+# A git worktree of a Unity repo is a complete Unity project (it has Assets/,
+# Packages/ and ProjectSettings/), so the Hub is happy to list it — it just
+# never learns the folder exists unless someone clicks "Add project from disk".
+# This script does that step for us.
+#
+# Commands:
+#   a_s_unity_hub add <path> [--title T] [--restart]
+#   a_s_unity_hub remove <path> [--restart]
+#   a_s_unity_hub sync [<worktrees-root>...] [--prune] [--restart]
+#   a_s_unity_hub list
+#
+# Non-Unity paths are skipped silently, so callers can invoke this for every
+# worktree without checking the project type first.
+
+set -uo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+HUB_JSON="$HOME/Library/Application Support/UnityHub/projects-v1.json"
+HUB_APP="/Applications/Unity Hub.app"
+
+RESTART_HUB=false
+PRUNE=false
+
+usage() {
+    cat <<'EOF'
+Usage:
+  a_s_unity_hub add <project-path> [--restart]
+  a_s_unity_hub remove <project-path> [--restart]
+  a_s_unity_hub sync [<worktrees-root>...] [--prune] [--restart]
+  a_s_unity_hub list
+
+Adds git worktrees (or any Unity project folder) to the Unity Hub project list
+so they show up without "Add project from disk".
+
+With no root, sync uses the WorkTrees directory that belongs to the repo you are
+standing in (the sibling of its main checkout), so a bare `a_s_unity_hub sync`
+sweeps every worktree of every repo in that workspace.
+
+Options:
+  --prune    With sync: also drop listed projects under the given roots whose
+             folder no longer exists on disk. Never touches projects outside
+             those roots.
+  --restart  Quit Unity Hub before writing and reopen it afterwards. The Hub
+             reads this list only at launch and rewrites it from memory, so
+             without a restart the change is invisible until you relaunch and
+             can be flushed over in the meantime.
+
+Notes:
+  • Paths that are not Unity projects (no ProjectSettings/ProjectVersion.txt)
+    are skipped without an error.
+  • For a worktree, Unity cloud/organization fields are inherited from the main
+    checkout's entry so the Hub links it to the same Unity project.
+  • The Hub names a project after its folder and re-derives that name at every
+    launch for any entry it did not rename itself, so this script does not try
+    to inject a nicer title — a worktree folder is already the branch name with
+    slashes turned into dashes (carsort/feature/glass-cover ->
+    carsort-feature-glass-cover). To pin a different name, rename the project
+    inside the Hub; that sticks, and this script never overwrites it.
+EOF
+}
+
+die() { echo -e "${RED}Error: $*${NC}" >&2; exit 1; }
+
+require_hub_json() {
+    [ -f "$HUB_JSON" ] || die "Unity Hub project list not found at $HUB_JSON
+Open Unity Hub once so it creates the file, then retry."
+}
+
+# Is this folder a Unity project?
+is_unity_project() {
+    [ -f "$1/ProjectSettings/ProjectVersion.txt" ]
+}
+
+# Read a value out of ProjectVersion.txt.
+#   $1 = project path, $2 = key (m_EditorVersion | m_EditorVersionWithRevision)
+project_version_field() {
+    sed -n "s/^$2: *//p" "$1/ProjectSettings/ProjectVersion.txt" | head -1 | tr -d '\r'
+}
+
+# The main checkout backing a worktree, or the path itself when it is not a
+# worktree. Used as the donor for cloud ids, build target and render pipeline.
+donor_path() {
+    local p="$1" common
+    common=$(git -C "$p" rev-parse --git-common-dir 2>/dev/null) || { echo "$p"; return; }
+    case "$common" in
+        /*) ;;
+        *) common="$p/$common" ;;
+    esac
+    (cd "$(dirname "$common")" 2>/dev/null && pwd) || echo "$p"
+}
+
+# Write the JSON atomically, keeping one backup. Hub's file is a single line;
+# jq -c preserves that shape.
+write_hub_json() {
+    local new="$1" tmp
+    tmp=$(mktemp "${TMPDIR:-/tmp}/unityhub-projects.XXXXXX") || die "mktemp failed"
+    printf '%s' "$new" > "$tmp" || die "could not write temp file"
+    jq empty < "$tmp" >/dev/null 2>&1 || { rm -f "$tmp"; die "refusing to write invalid JSON"; }
+    cp "$HUB_JSON" "$HUB_JSON.bak" 2>/dev/null
+    mv "$tmp" "$HUB_JSON" || die "could not replace $HUB_JSON"
+}
+
+# Was the Hub running when we started? Only then do we reopen it afterwards.
+HUB_WAS_RUNNING=false
+
+hub_is_running() { pgrep -f "$HUB_APP/Contents/MacOS/Unity Hub" >/dev/null 2>&1; }
+
+# Called BEFORE any write. The Hub rewrites the project list from memory when it
+# quits, so quitting after the write can flush our change away.
+stop_hub_if_asked() {
+    [ "$RESTART_HUB" = true ] || return 0
+    hub_is_running || return 0
+    HUB_WAS_RUNNING=true
+    echo -e "${YELLOW}Quitting Unity Hub before editing its project list…${NC}"
+    osascript -e 'tell application "Unity Hub" to quit' >/dev/null 2>&1
+    local i=0
+    while hub_is_running && [ $i -lt 30 ]; do sleep 0.5; i=$((i + 1)); done
+    hub_is_running && die "Unity Hub did not quit — close it and retry."
+    sleep 1
+}
+
+start_hub_if_asked() {
+    [ "$RESTART_HUB" = true ] || return 0
+    open -g -a "$HUB_APP" 2>/dev/null
+    if [ "$HUB_WAS_RUNNING" = true ]; then
+        echo -e "${GREEN}✓ Unity Hub restarted${NC}"
+    else
+        echo -e "${GREEN}✓ Started Unity Hub${NC}"
+    fi
+}
+
+warn_if_hub_running() {
+    [ "$RESTART_HUB" = true ] && return 0
+    if hub_is_running; then
+        echo -e "${YELLOW}Unity Hub is running — it reads this list only at launch and rewrites"
+        echo -e "it from memory, so restart the Hub to see (and keep) the change.${NC}"
+        echo -e "${BLUE}  a_s_unity_hub add <path> --restart${NC}   does that for you."
+    fi
+}
+
+# ── add ───────────────────────────────────────────────────────────────────────
+cmd_add() {
+    local raw="$1" path title
+    path=$(cd "$raw" 2>/dev/null && pwd) || die "no such directory: $raw"
+
+    if ! is_unity_project "$path"; then
+        echo -e "${BLUE}Not a Unity project, skipping: $path${NC}"
+        return 0
+    fi
+    require_hub_json
+
+    local version revision changeset parent donor
+    version=$(project_version_field "$path" m_EditorVersion)
+    revision=$(project_version_field "$path" m_EditorVersionWithRevision)
+    # "6000.0.67f1 (78a1c2bbeb6a)" -> "78a1c2bbeb6a"
+    changeset=$(printf '%s' "$revision" | sed -n 's/.*(\(.*\)).*/\1/p')
+    [ -n "$version" ] || die "could not read m_EditorVersion from $path/ProjectSettings/ProjectVersion.txt"
+
+    parent=$(dirname "$path")
+    donor=$(donor_path "$path")
+    [ "$donor" = "$path" ] && donor=""
+
+    # Match how the Hub names projects: the folder name. Anything else is reset
+    # at the Hub's next launch anyway (see the note in --help).
+    title=$(basename "$path")
+
+    local now updated
+    now=$(( $(date +%s) * 1000 ))
+
+    updated=$(jq -c \
+        --arg path "$path" \
+        --arg parent "$parent" \
+        --arg version "$version" \
+        --arg changeset "$changeset" \
+        --arg title "$title" \
+        --arg donor "$donor" \
+        --argjson now "$now" '
+        # Fields the Hub copies from the main checkout when one is listed:
+        # they identify the Unity cloud project, which a worktree shares.
+        (if $donor == "" then {} else (.data[$donor] // {}) end) as $src
+        | ($src | {genesisOrgId, cloudProjectId, organizationId, localProjectId,
+                   cloudEnabled, projectName, organizationName, buildTarget,
+                   renderPipeline}
+                | with_entries(select(.value != null))) as $inherited
+        | (.data[$path] // {}) as $existing
+        | .data[$path] = ({
+              isCustomEditor: false,
+              isFavorite: false,
+              cloudEnabled: true,
+              buildTarget: "Android",
+              renderPipeline: "URP"
+          }
+          + $inherited
+          # An entry already in the list wins: never clobber a title, favorite
+          # flag or build target the user set inside the Hub.
+          + $existing
+          + {
+              path: $path,
+              containingFolderPath: $parent,
+              version: $version,
+              changeset: $changeset,
+              architecture: "arm64",
+              lastModified: $now
+          }
+          + (if ($existing | has("title")) then {} else {title: $title, hasCustomDisplayName: false} end))
+        ' "$HUB_JSON") || die "jq failed while updating the project list"
+
+    write_hub_json "$updated"
+
+    if jq -e --arg p "$path" '.data[$p]' "$HUB_JSON" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ Unity Hub: $(jq -r --arg p "$path" '.data[$p].title' "$HUB_JSON")${NC}"
+        echo "  $path  ($version)"
+    else
+        die "entry did not land in $HUB_JSON"
+    fi
+}
+
+# ── remove ────────────────────────────────────────────────────────────────────
+cmd_remove() {
+    local raw="$1" path updated
+    # The folder may already be gone (worktree removed first), so resolve
+    # without requiring it to exist.
+    path=$(cd "$raw" 2>/dev/null && pwd) || path="${raw%/}"
+    require_hub_json
+
+    if ! jq -e --arg p "$path" 'has("data") and (.data | has($p))' "$HUB_JSON" >/dev/null 2>&1; then
+        echo -e "${BLUE}Not listed in Unity Hub, nothing to remove: $path${NC}"
+        return 0
+    fi
+    updated=$(jq -c --arg p "$path" 'del(.data[$p])' "$HUB_JSON") || die "jq failed"
+    write_hub_json "$updated"
+    echo -e "${GREEN}✓ Removed from Unity Hub: $path${NC}"
+}
+
+# ── sync ──────────────────────────────────────────────────────────────────────
+cmd_sync() {
+    local roots=("$@") root child
+    require_hub_json
+
+    for root in "${roots[@]}"; do
+        [ -d "$root" ] || { echo -e "${YELLOW}Skipping missing root: $root${NC}"; continue; }
+        root=$(cd "$root" && pwd)
+        echo -e "${BLUE}Scanning $root${NC}"
+
+        # One level for <root>/<worktree>, two for <root>/<repo>/<worktree>.
+        while IFS= read -r child; do
+            [ -d "$child" ] || continue
+            is_unity_project "$child" || continue
+            cmd_add "$child"
+        done < <(find "$root" -mindepth 1 -maxdepth 2 -type d -not -name '.*' 2>/dev/null)
+
+        if [ "$PRUNE" = true ]; then
+            local dead
+            while IFS= read -r dead; do
+                [ -n "$dead" ] || continue
+                [ -d "$dead" ] && continue
+                cmd_remove "$dead"
+            done < <(jq -r --arg r "$root/" '.data | keys[] | select(startswith($r))' "$HUB_JSON")
+        fi
+    done
+}
+
+# ── list ──────────────────────────────────────────────────────────────────────
+cmd_list() {
+    require_hub_json
+    jq -r '.data | to_entries[] | "\(.value.version)\t\(.value.title)\t\(.key)"' "$HUB_JSON" \
+        | sort -t$'\t' -k3 | column -t -s$'\t'
+}
+
+# ── argument parsing ──────────────────────────────────────────────────────────
+[ $# -gt 0 ] || { usage; exit 1; }
+
+COMMAND="$1"; shift
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --restart) RESTART_HUB=true ;;
+        --prune) PRUNE=true ;;
+        -h|--help) usage; exit 0 ;;
+        -*) die "unknown option: $1" ;;
+        *) ARGS+=("$1") ;;
+    esac
+    shift
+done
+
+command -v jq >/dev/null 2>&1 || die "jq is required (brew install jq)"
+
+case "$COMMAND" in
+    add)
+        [ ${#ARGS[@]} -ge 1 ] || die "add needs a project path"
+        stop_hub_if_asked
+        cmd_add "${ARGS[0]}"
+        warn_if_hub_running
+        start_hub_if_asked
+        ;;
+    remove|rm)
+        [ ${#ARGS[@]} -ge 1 ] || die "remove needs a project path"
+        stop_hub_if_asked
+        cmd_remove "${ARGS[0]}"
+        warn_if_hub_running
+        start_hub_if_asked
+        ;;
+    sync)
+        # No root given: use the WorkTrees dir belonging to the repo we're in.
+        # a_g_worktree_init puts worktrees in <workspace>/WorkTrees/<repo>/<branch>,
+        # where <workspace> is the parent of the main checkout — derive the same
+        # place from the git common dir so this works from inside a worktree too.
+        if [ ${#ARGS[@]} -eq 0 ]; then
+            _common=$(git rev-parse --git-common-dir 2>/dev/null) \
+                || die "sync needs a worktrees root (or run it inside a git repo)"
+            case "$_common" in /*) ;; *) _common="$PWD/$_common" ;; esac
+            _main=$(cd "$(dirname "$_common")" && pwd)
+            ARGS=("$(dirname "$_main")/WorkTrees")
+            echo -e "${BLUE}No root given — using ${ARGS[0]}${NC}"
+        fi
+        stop_hub_if_asked
+        cmd_sync "${ARGS[@]}"
+        warn_if_hub_running
+        start_hub_if_asked
+        ;;
+    list|ls) cmd_list ;;
+    -h|--help|help) usage ;;
+    *) die "unknown command: $COMMAND (try --help)" ;;
+esac
