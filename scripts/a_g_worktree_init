@@ -341,6 +341,49 @@ if [ $? -eq 0 ]; then
         "$UNITY_HUB_HELPER" add "$WORKTREE_PATH"
     fi
 
+    # Seed the mcp-unity bridge settings so the editor bridge works in a new
+    # worktree without being switched on by hand every time.
+    #
+    # WHY: AllowRemoteConnections defaults to false in the package, and it is
+    # persisted ONLY to ProjectSettings/McpUnitySettings.json, which the Unity
+    # repos gitignore. A fresh worktree therefore has no file, falls back to the
+    # default, and binds the WebSocket to "localhost" instead of "0.0.0.0". A
+    # client that reaches it over IPv4 loopback (which is what happens when the
+    # session runs inside zellij) then cannot connect, and every tool call times
+    # out until someone ticks the box in the MCP Unity window.
+    #
+    # Values are carried over from the main checkout when it has them, so a
+    # non-default Port or NpmExecutablePath survives into the worktree.
+    MCP_SETTINGS_REL="ProjectSettings/McpUnitySettings.json"
+    if [ -f "$WORKTREE_PATH/ProjectSettings/ProjectVersion.txt" ] && \
+       [ ! -f "$WORKTREE_PATH/$MCP_SETTINGS_REL" ] && command -v python3 >/dev/null 2>&1; then
+        if python3 - "$MAIN_ROOT/$MCP_SETTINGS_REL" "$WORKTREE_PATH/$MCP_SETTINGS_REL" <<'PY'
+import json, os, sys
+src, dst = sys.argv[1], sys.argv[2]
+settings = {
+    "Port": 8090,
+    "RequestTimeoutSeconds": 10,
+    "AutoStartServer": True,
+    "EnableInfoLogs": True,
+    "NpmExecutablePath": "",
+    "AllowRemoteConnections": True,
+}
+if os.path.isfile(src):
+    try:
+        with open(src) as fh:
+            settings.update(json.load(fh))
+    except (OSError, ValueError):
+        pass
+settings["AllowRemoteConnections"] = True
+os.makedirs(os.path.dirname(dst), exist_ok=True)
+with open(dst, "w") as fh:
+    json.dump(settings, fh, indent=4)
+PY
+        then
+            echo -e "${GREEN}✓ Seeded mcp-unity settings (remote connections enabled)${NC}"
+        fi
+    fi
+
     echo ""
 
     # Auto-cd if being sourced, otherwise provide instructions
