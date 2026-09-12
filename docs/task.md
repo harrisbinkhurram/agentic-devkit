@@ -6,6 +6,14 @@ worktree), the rest let you list, resume, and finish tasks across every repo.
 
 ```mermaid
 flowchart LR
+    subgraph fronts["fronts (one per task source)"]
+        J["a_c_jira_task_start"]
+        G["a_c_github_issue_fix"]
+        M["a_c_mdnest_task_start"]
+    end
+    J -->|"Jira ticket"| START
+    G -->|"GitHub issue"| START
+    M -->|"mdNest note"| START
     START["a_c_task_start"] -->|pick repo + ticket| INIT["a_g_worktree_init &lt;branch&gt;"]
     INIT -->|cd into worktree| WT["WorkTrees/&lt;repo&gt;/PROJ-123-feature"]
     START -->|append row| REG[("~/.a_tasks/tasks.tsv")]
@@ -18,6 +26,9 @@ flowchart LR
     style START fill:#1f7a3a,stroke:#0f4d24,color:#ffffff,stroke-width:2px
     style INIT fill:#1d4ed8,stroke:#1e3a8a,color:#ffffff,stroke-width:2px
     style REG fill:#334155,stroke:#1e293b,color:#ffffff,stroke-width:2px
+    style J fill:#b45309,stroke:#7c3a06,color:#ffffff,stroke-width:2px
+    style G fill:#b45309,stroke:#7c3a06,color:#ffffff,stroke-width:2px
+    style M fill:#b45309,stroke:#7c3a06,color:#ffffff,stroke-width:2px
 ```
 
 ## Commands
@@ -29,13 +40,85 @@ flowchart LR
 | `a_c_task_list` | Read-only table of all active tasks and their worktree state. |
 | `a_c_task_finish [ticket\|branch] [-v] [-f] [--keep-remote]` | Remove the worktree + branch via `a_g_worktree_remove` and drop the task from the registry. Flags pass straight through (`-v` verifies merged first). |
 
+## Task sources: the "front" scripts
+
+`a_c_task_start` is the generic engine (worktree + registry + launch Claude). On
+top of it sit thin **fronts**, one per task source. Each one fetches from its own
+source, then calls the same engine, so everything downstream (worktree, zellij,
+permission posture, idempotency) behaves identically no matter where the task
+came from. Each front is fully non-interactive and starts Claude for you.
+
+| Front | Takes | Needs `-r`? |
+|---|---|---|
+| `a_c_jira_task_start <PROJ-123 \| 123 \| jira-url>` | a Jira ticket | **yes** |
+| `a_c_github_issue_fix <issue-url \| owner/repo#N \| N>` | a GitHub issue | no (URL/slug forms) |
+| `a_c_mdnest_task_start <@srv/ns/path.md>` | an mdNest note | **yes** |
+
+They share the same flags: `-b <base>`, `-z <session>`, `-p <prompt>`, `-y`
+(fully hands-off, no approval prompts), `--fresh`, `-n` (dry run), `-h`, and
+`-- <claude args>`.
+
+**Why `-r` differs:** a Jira URL and an mdNest path do not say which repo the
+work belongs to, so you name it. A GitHub issue URL already contains
+`owner/repo`, so `a_c_github_issue_fix` resolves the local clone itself via
+`a_s_resolve_repo` (cache -> workspace scan -> clone only as a last resort, so
+it reuses the checkout you already have). Pass `-r` only for a bare issue
+number, or to force a specific clone.
+
+```bash
+# GitHub issue: repo resolved for you, opens in the "work" zellij session
+a_c_github_issue_fix https://github.com/owner/repo/issues/142 -z work
+
+# same issue, bare number, so name the repo
+a_c_github_issue_fix 142 -r myrepo -b main
+
+# see the plan without touching anything (read-only: fetches, never clones)
+a_c_github_issue_fix owner/repo#142 -n
+```
+
+`a_c_github_issue_fix` names the branch `<prefix>/gh-<N>-<title-slug>`, e.g.
+`feature/gh-142-flaky-login-redirect`. The prefix is `hotfix` when the issue
+carries a bug/defect/regression/incident **label** and `feature` otherwise,
+mirroring the Jira front's issue-type rule. Override with `A_TASK_BRANCH_TYPE`.
+The issue title, labels, state, URL and body are snapshotted to a file that
+Claude is told to read first. Requires an authenticated `gh` (`gh auth status`).
+
+> The task id is `gh-<N>`, scoped to the issue number and not the repo, so
+> `gh-7` in two different repos shares a task id. Resume by branch name if you
+> ever run both at once.
+
 ## Start straight into Claude (Remote Control)
 
 `-c` makes `a_c_task_start` hand the new worktree to `scripts/a_c_claude_remote`,
 which launches an interactive Claude Code session there with Remote Control
 already on (so you can drive it from the app). The session is named after the
-ticket, and it defaults to `--permission-mode acceptEdits` so a remote-driven
-session is not blocked waiting for terminal approvals.
+ticket (both the Remote Control name and the session's own `--name`, so the tab,
+the app and the peer registry all show the same string and another session can
+address it by ticket id).
+
+It defaults to `--permission-mode auto`, so an unattended session never sits on
+an approval prompt. In auto mode a genuinely risky action is refused and the
+refusal is handed to the model, which then carries on; nothing waits for a human.
+The old default, `acceptEdits`, auto-accepted file edits but still stopped and
+asked before running any command, so a session left alone would park itself at
+its first test run and never finish.
+
+Two knobs:
+
+- `A_TASK_PERMISSION_MODE=<mode>` changes the default, per run or per machine.
+- `--bypass` removes permission checks entirely
+  (`--dangerously-skip-permissions`), but only on a machine where a human has
+  accepted bypass once by hand. Everywhere else it is **downgraded to the normal
+  mode automatically**, with a line saying so, because claude would otherwise open
+  "Bypass Permissions mode on?" and wait for a keypress that an unattended tab
+  never gets. You do not need to remember which machine is which, and you do not
+  need to accept bypass to run unattended: auto mode already never waits.
+
+On a machine whose `claude` is too old to know `auto`, the default falls back to
+`acceptEdits` rather than failing at startup, because an unrecognised mode aborts
+the session. The mode is decided in exactly one place, `a_task_permission_mode`
+in `scripts/a_s_task_common.sh`; the `jira` / `mdnest` / `github` fronts pass no
+mode of their own.
 
 ```bash
 # create the worktree AND drop into a remote-controlled Claude session
@@ -54,7 +137,7 @@ replaced; when you exit Claude, control returns to your shell — still inside t
 worktree. `a_c_claude_remote` is also usable on its own and from other scripts:
 
 ```bash
-a_c_claude_remote ~/Repos/foo "fix the build" -- --permission-mode acceptEdits
+a_c_claude_remote ~/Repos/foo "fix the build" -- --permission-mode acceptEdits  # pause before commands
 a_c_claude_remote -N -n demo ~/Repos/foo "hi"   # -N prints the command, no launch
 ```
 
@@ -112,8 +195,14 @@ a_c_task_start -y -r myrepo -t 942 -f "list filter" -b main -c -p "read the tick
 
 ## Branch naming
 
+**A ticket is mandatory.** Passed with `-t` it is normalized; omitted, the script prompts and
+**cancels on an empty answer**, so there is no unticketed path. Maintenance work with no natural
+ticket needs one created first — `a_c_idea_start` takes no ticket but makes a scratch directory,
+not a repo worktree, so it is not a substitute.
+
 `<TICKET>-<feature-slug>`. The ticket is normalized: `PROJ-123`, `proj123`, a bare
-`123` (default project key `PROJ`, override with `A_TASK_DEFAULT_KEY`), or a pasted
+`123` (which takes the default project key — `A_TASK_DEFAULT_KEY` overrides it, and the fallback
+is set in `scripts/a_s_task_common.sh`, so read it there rather than assuming), or a pasted
 Jira browse URL like `https://your-org.atlassian.net/browse/PROJ-1009` all resolve
 to the key. The feature text is slugified (lowercased, non-alphanumeric runs
 collapse to single dashes). Example: ticket `123` + "Add login page" ->
@@ -126,16 +215,40 @@ and pre-fills the feature name (press Enter to accept the suggested slug, or typ
 your own). Without credentials it silently falls back to the manual prompt, so
 the feature is purely additive. `-f/--feature` skips the fetch entirely.
 
-Put these in `~/.my_secrets` (sourced by your profile, never committed):
+Put these in `~/.my_secrets` or `~/.a_secs` (both sourced by `generic.profile`,
+neither ever committed):
 
 | Var | Meaning |
 |---|---|
-| `A_JIRA_EMAIL` | Your Atlassian account email. |
+| `A_JIRA_EMAIL` | Your Atlassian account **email** (not a username). |
 | `A_JIRA_TOKEN` | A Jira API token. Create at `https://id.atlassian.com/manage-profile/security/api-tokens`. |
-| `A_JIRA_BASE` | Site base URL. Optional; defaults to `https://your-org.atlassian.net`. |
+| `A_JIRA_BASE` | Site base URL, e.g. `https://your-org.atlassian.net`. |
+
+If your secrets file already carries the generic Atlassian names that other
+tools use, `generic.profile` maps them across for you, so you do not have to
+duplicate the values:
+
+| Generic name | Maps to |
+|---|---|
+| `ATLASSIAN_USERNAME` | `A_JIRA_EMAIL` |
+| `ATLASSIAN_API_TOKEN` | `A_JIRA_TOKEN` |
+| `JIRA_URL` | `A_JIRA_BASE` (trailing `/` stripped) |
+
+An explicitly set `A_JIRA_*` always wins over the mapping.
 
 The token is fed to `curl -K -` over stdin, so it never shows up in `ps`/argv.
-Only the issue summary is read (a read-only GET).
+Only the issue summary and issue type are read (read-only GETs).
+
+**When this is misconfigured it fails silently by design**, falling back to a
+manual prompt (or, in auto mode, a ticket-only branch like `feature/proj-123`
+with no slug, and always the `feature/` prefix). So a branch name with no slug
+is the symptom to look for. Check it in one command:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -u "$A_JIRA_EMAIL:$A_JIRA_TOKEN" \
+  "$A_JIRA_BASE/rest/api/3/myself"
+# 200 = working · 401 = bad email/token pair · 404 = wrong site in A_JIRA_BASE
+```
 
 ## State
 

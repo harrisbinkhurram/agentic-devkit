@@ -33,8 +33,10 @@
 #   -c, --claude   After the worktree is ready, launch an interactive Claude
 #                  Code session in it with Remote Control on (via
 #                  a_c_claude_remote). The session is named after the ticket and
-#                  starts in --permission-mode acceptEdits so a remote-driven
-#                  session is not blocked on terminal approvals. Control returns
+#                  starts in a permission mode that does not wait on a human
+#                  (--permission-mode auto where the installed claude supports
+#                  it), so an unattended session is never parked on an approval
+#                  prompt. Override with A_TASK_PERMISSION_MODE. Control returns
 #                  to the worktree shell when Claude exits.
 #   -p, --prompt   First message to send Claude (implies -c). Quote it.
 #      --task-file <path>  Local file with the task description. The engine copies
@@ -56,12 +58,19 @@
 #   -y, --yes      Auto-accept THIS SCRIPT's "Proceed?" confirmation (--auto is an
 #                  alias). Also implied when stdin is not a TTY. NOTE: this is the
 #                  script's own gate, NOT the Claude session's approvals; for a
-#                  hands-off Claude session use --bypass (below) or acceptEdits.
-#      --bypass    Launch Claude fully hands-off (--dangerously-skip-permissions:
-#                  no approval prompts at all); --dangerous is an alias. Implies
-#                  -c. Default without it is --permission-mode acceptEdits (auto-
-#                  accepts edits, still asks before other commands). An explicit
-#                  permission flag after -- overrides both.
+#                  Claude session's approvals are already hands-off by default;
+#                  see --bypass below to remove even the auto-mode guardrail.
+#      --bypass    Ask for NO permission checks at all
+#                  (--dangerously-skip-permissions); --dangerous is an alias.
+#                  Honored only where a human has accepted bypass once by hand;
+#                  otherwise it is downgraded to the normal mode automatically
+#                  (it would otherwise hang on a confirmation dialog). You do not
+#                  need bypass to run unattended: auto mode never waits either.
+#                  Implies -c. Without it the default is --permission-mode auto,
+#                  which also never waits for input but still refuses genuinely
+#                  risky actions (the refusal goes to the model, it does not
+#                  block). Set A_TASK_PERMISSION_MODE to choose a different
+#                  default. An explicit permission flag after -- overrides both.
 #      --fresh     Recreate if the task's worktree already exists. Default is
 #                  IDEMPOTENT: a repeat call resumes the existing task (focuses
 #                  its zellij tab / cd's into the worktree) instead of starting a
@@ -385,9 +394,9 @@ _a_c_task_start_main() {
     # 5/6. open in a zellij tab (-z) and/or launch a Claude session (-c) -------
     # Build the Claude argv up front so the exact same command can run either
     # inside a zellij tab or (the original behaviour) straight in this terminal.
-    # Default the session to acceptEdits so a remote-driven session is not
-    # blocked on terminal approvals; skip the default if the caller already
-    # passed a permission flag through --.
+    # Default the session to a mode that does not wait on a human (see
+    # a_task_permission_mode: "auto" where supported); skip the default if the
+    # caller already passed a permission flag through --.
     local cr="$A_C_TASK_BASE/scripts/a_c_claude_remote"
     local cr_args=() a has_perm=0
     if [ "$claude_flag" -eq 1 ]; then
@@ -400,10 +409,10 @@ _a_c_task_start_main() {
         [ -n "$prompt_arg" ] && cr_args+=("$prompt_arg")
         cr_args+=(--)
         # Posture: an explicit flag via -- wins; else --bypass = full hands-off
-        # (--dangerously-skip-permissions); else the safe default acceptEdits.
+        # (--dangerously-skip-permissions); else a_task_permission_mode().
         if [ "$has_perm" -eq 1 ]; then :
         elif [ "$bypass_flag" -eq 1 ]; then cr_args+=(--dangerously-skip-permissions)
-        else cr_args+=(--permission-mode acceptEdits); fi
+        else cr_args+=(--permission-mode "$(a_task_permission_mode)"); fi
         [ "${#passthrough[@]}" -gt 0 ] && cr_args+=("${passthrough[@]}")
     fi
 
@@ -416,33 +425,47 @@ _a_c_task_start_main() {
         if ! command -v zellij >/dev/null 2>&1; then
             echo -e "${A_T_YELLOW}zellij not found on PATH - opening here instead of in a session.${A_T_NC}"
         else
-            local zj_tab launcher=""
+            local zj_tab launcher="" zj_rc=0
             zj_tab="$(a_task_zellij_tab_name "$ticket" "$slug")"
             if [ "$claude_flag" -eq 1 ] && [ -f "$cr" ]; then
                 launcher="$(a_task_zellij_make_launcher "$expected_wt" "$cr" "${cr_args[@]}")"
             fi
-            a_task_zellij_setup "$zellij_arg" "$zj_tab" "$expected_wt" "$launcher"
-            echo ""
-            if [ -z "${ZELLIJ:-}" ]; then
-                echo -e "${A_T_BLUE}Opening in zellij${A_T_NC} ${A_T_DIM}session: $zellij_arg · tab: $zj_tab${A_T_NC}"
-                # Child process (NOT sourced/exec'd): when you detach, control
-                # returns to this worktree shell, like the -c terminal path.
-                zellij attach "$zellij_arg"
-            elif [ "${ZELLIJ_SESSION_NAME:-}" = "$zellij_arg" ]; then
-                echo -e "${A_T_GREEN}✓ Opened tab${A_T_NC} ${A_T_DIM}$zj_tab (this session)${A_T_NC}"
-                zellij action go-to-tab-name "$zj_tab" >/dev/null 2>&1
+            a_task_zellij_setup "$zellij_arg" "$zj_tab" "$expected_wt" "$launcher" || zj_rc=$?
+            # Never claim a tab we do not have. A dead session or a rejected
+            # new-tab used to slip through here and print "✓ Tab ready", so the
+            # Claude session was silently never started. Fall through to the
+            # terminal launch below instead, which is visible and still works.
+            if [ "$zj_rc" -ne 0 ]; then
+                echo ""
+                echo -e "${A_T_RED}zellij tab failed${A_T_NC} ${A_T_DIM}(session '$zellij_arg', tab '$zj_tab', code $zj_rc)${A_T_NC}"
+                echo -e "  ${A_T_DIM}falling back to launching here in this terminal.${A_T_NC}"
             else
-                # We are not inside $zellij_arg (a different session, or a routine
-                # that faked ZELLIJ to avoid the resize-on-attach bug). If you are
-                # nonetheless attached to $zellij_arg in another terminal/pane,
-                # switch you to the freshly-created tab; new-tab alone only marks
-                # it active in state, it does not move an already-attached client.
-                # Guarded so it can never hang the routine when nobody is attached.
-                a_task_zellij_focus_tab "$zellij_arg" "$zj_tab"
-                echo -e "${A_T_GREEN}✓ Tab ready${A_T_NC} ${A_T_DIM}$zj_tab in session '$zellij_arg'.${A_T_NC}"
-                echo -e "  ${A_T_DIM}switch:${A_T_NC} detach (Ctrl-o d), then  zellij attach $zellij_arg  ${A_T_DIM}(or the session manager: Ctrl-o w)${A_T_NC}"
+                echo ""
+                if [ -z "${ZELLIJ:-}" ] && a_task_can_attach; then
+                    echo -e "${A_T_BLUE}Opening in zellij${A_T_NC} ${A_T_DIM}session: $zellij_arg · tab: $zj_tab${A_T_NC}"
+                    # Child process (NOT sourced/exec'd): when you detach, control
+                    # returns to this worktree shell, like the -c terminal path.
+                    zellij attach "$zellij_arg"
+                elif [ "${ZELLIJ_SESSION_NAME:-}" = "$zellij_arg" ]; then
+                    echo -e "${A_T_GREEN}✓ Opened tab${A_T_NC} ${A_T_DIM}$zj_tab (this session)${A_T_NC}"
+                    zellij action go-to-tab-name "$zj_tab" >/dev/null 2>&1
+                else
+                    # Either we are inside a DIFFERENT zellij session, or nobody is
+                    # watching a terminal (a routine, a cron job, tether pressing a
+                    # button - note a pty passes isatty, so a_task_can_attach checks
+                    # the window size). Neither may attach: that dumps the raw zellij
+                    # UI into the caller's output, holds the process open, and clamps
+                    # the session to the caller's tiny pty. If you happen to be
+                    # attached to $zellij_arg in another terminal, move you to the
+                    # new tab; new-tab alone only marks it active in state, it does
+                    # not move an already-attached client. Guarded so it can never
+                    # hang when nobody is attached.
+                    a_task_zellij_focus_tab "$zellij_arg" "$zj_tab"
+                    echo -e "${A_T_GREEN}✓ Tab ready${A_T_NC} ${A_T_DIM}$zj_tab in session '$zellij_arg'.${A_T_NC}"
+                    echo -e "  ${A_T_DIM}switch:${A_T_NC} detach (Ctrl-o d), then  zellij attach $zellij_arg  ${A_T_DIM}(or the session manager: Ctrl-o w)${A_T_NC}"
+                fi
+                return 0
             fi
-            return 0
         fi
     fi
 
