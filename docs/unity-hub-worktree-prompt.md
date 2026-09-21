@@ -34,18 +34,29 @@ Facts I already checked, so you do not need to rediscover them. Please verify an
 on, but start from here:
 
 - Unity Hub has no command line option for adding a project. Its --headless interface only covers
-  editors and install paths. So the tool has to edit the Hub's own project list, which on macOS is
-  a single JSON file at "~/Library/Application Support/UnityHub/projects-v1.json". The shape is
-  {"schema_version":"v1","data":{"<absolute project path>":{...}}}. Copy the field layout from an
-  entry the Hub already wrote. Write the file atomically and keep a backup copy.
+  editors and install paths. So the tool has to edit the Hub's own project list directly.
+- Where that list lives depends on the Hub version, and getting this wrong is the one mistake that
+  produces a tool which looks like it works. Up to Hub 3.20 it is a single JSON file on macOS at
+  "~/Library/Application Support/UnityHub/projects-v1.json", shaped
+  {"schema_version":"v1","data":{"<absolute project path>":{...}}}. Hub 3.21 moved it to SQLite at
+  "~/Library/Application Support/UnityHub/hub.db", table projects(path, data, updated_at) where
+  data is the same entity as a JSON encoded string. The Hub imports the JSON into the DB once and
+  marks that in the meta table under key "projects_json_migrated". Check that marker: if it is set,
+  the DB is the only list the Hub reads and the JSON is demoted to a startup paint cache plus a
+  downgrade mirror that the Hub overwrites from memory on shutdown. Writing only the JSON there
+  makes entries appear on the Hub's first frame and then vanish a few seconds later when the real
+  list loads. Write whichever store the marker says is authoritative, and mirror into the other so
+  the paint cache does not flash a stale list. Copy the field layout from an entry the Hub already
+  wrote. Write the JSON atomically and keep a backup copy; use a busy timeout on the DB, because
+  the Hub may hold it open.
 - A git worktree of a Unity repo is a complete Unity project. It has Assets, Packages and
   ProjectSettings, so the Hub can open it directly. Nothing needs to be copied or generated.
 - Read the editor version and changeset from "<project>/ProjectSettings/ProjectVersion.txt", from
   the m_EditorVersion and m_EditorVersionWithRevision lines.
-- Unity Hub reads that JSON file only when it launches, and it rewrites the file from memory while
-  it runs. So a change made while the Hub is open shows up the next time the Hub is started. If the
-  tool offers a --restart option, it must quit the Hub BEFORE writing and reopen it after. Quitting
-  after the write can lose the change, because the Hub writes its in memory list on the way out.
+- Unity Hub loads the project list when it launches and keeps it in memory while it runs. So a
+  change made while the Hub is open shows up the next time the Hub is started. If the tool offers a
+  --restart option, it must quit the Hub BEFORE writing and reopen it after. Quitting after the
+  write can lose the change, because the Hub writes its in memory list on the way out.
 - Unity Hub names a project after its folder, and it works that name out again at every launch for
   any entry it did not rename itself. So do not try to inject a nicer display name, it will not
   survive. A worktree folder name is usually already the branch name with slashes turned into

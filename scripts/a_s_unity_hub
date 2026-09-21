@@ -2,13 +2,43 @@
 # a_s_unity_hub — keep Unity Hub's project list in sync with git worktrees.
 #
 # Unity Hub has no CLI command to add a project (its --headless interface only
-# covers editors and install paths), so the project list is edited directly in
-#   ~/Library/Application Support/UnityHub/projects-v1.json
+# covers editors and install paths), so the project list is edited directly on
+# disk.
 #
 # A git worktree of a Unity repo is a complete Unity project (it has Assets/,
 # Packages/ and ProjectSettings/), so the Hub is happy to list it — it just
 # never learns the folder exists unless someone clicks "Add project from disk".
 # This script does that step for us.
+#
+# WHERE THE LIST LIVES (this changed in Hub 3.21)
+#
+# Up to Hub 3.20 the list was one file:
+#   ~/Library/Application Support/UnityHub/projects-v1.json
+#
+# Hub 3.21 moved it to SQLite:
+#   ~/Library/Application Support/UnityHub/hub.db     (table `projects`)
+#
+# On first launch of 3.21 the Hub imports projects-v1.json into hub.db once and
+# records that in `meta.projects_json_migrated`. From then on hub.db is the only
+# source of truth, and projects-v1.json is demoted to two lesser jobs:
+#
+#   1. a first-paint cache — readProjectsSnapshotSync() reads it synchronously
+#      at window construction and shows the first 20 entries before any service
+#      has started;
+#   2. a downgrade mirror — persistCompatibilityMirror() rewrites it from the
+#      Hub's in-memory list on shutdown.
+#
+# So a JSON-only write on 3.21+ produces exactly the "it was there, then it went
+# away" symptom: the entry paints from the cache, then ~5s later the project
+# service finishes loading hub.db ("LocalProject: Forced refresh: Projects data
+# will be re-collected" in the Hub log) and the renderer replaces the list with
+# the DB's — which never had the entry. The shutdown mirror then overwrites the
+# JSON, erasing the last trace.
+#
+# This script therefore writes to hub.db when hub.db is authoritative, and keeps
+# projects-v1.json in step so the first-paint cache does not flash a stale list.
+# When there is no hub.db, or the one-time import has not run yet, the JSON is
+# still authoritative and is written alone, exactly as before.
 #
 # Commands:
 #   a_s_unity_hub add <path> [--title T] [--restart]
@@ -27,7 +57,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-HUB_JSON="$HOME/Library/Application Support/UnityHub/projects-v1.json"
+HUB_DIR="$HOME/Library/Application Support/UnityHub"
+HUB_JSON="$HUB_DIR/projects-v1.json"
+HUB_DB="$HUB_DIR/hub.db"
 HUB_APP="/Applications/Unity Hub.app"
 
 RESTART_HUB=false
@@ -53,13 +85,18 @@ Options:
              folder no longer exists on disk. Never touches projects outside
              those roots.
   --restart  Quit Unity Hub before writing and reopen it afterwards. The Hub
-             reads this list only at launch and rewrites it from memory, so
-             without a restart the change is invisible until you relaunch and
-             can be flushed over in the meantime.
+             loads the project list at launch and keeps it in memory, so
+             without a restart the change is invisible until you relaunch.
 
 Notes:
   • Paths that are not Unity projects (no ProjectSettings/ProjectVersion.txt)
     are skipped without an error.
+  • Hub 3.21+ keeps the list in hub.db (SQLite); older Hubs use
+    projects-v1.json. This writes whichever one the Hub will actually read and
+    mirrors into the other. `list` prints which store is in force. On 3.21+,
+    sqlite3 is required — without it a write would land only in the JSON, which
+    the Hub uses as a startup cache, so the entry would appear and then vanish
+    a few seconds later when the real list loads.
   • For a worktree, Unity cloud/organization fields are inherited from the main
     checkout's entry so the Hub links it to the same Unity project.
   • The Hub names a project after its folder and re-derives that name at every
@@ -74,8 +111,110 @@ EOF
 die() { echo -e "${RED}Error: $*${NC}" >&2; exit 1; }
 
 require_hub_json() {
-    [ -f "$HUB_JSON" ] || die "Unity Hub project list not found at $HUB_JSON
+    [ -f "$HUB_JSON" ] && return 0
+    # A profile that has only ever run Hub 3.21+ may have no JSON mirror yet.
+    # Seed an empty one rather than refusing to work.
+    if db_authoritative; then
+        printf '%s' '{"schema_version":"v1","data":{}}' > "$HUB_JSON" \
+            || die "could not create $HUB_JSON"
+        return 0
+    fi
+    die "Unity Hub project list not found at $HUB_JSON
 Open Unity Hub once so it creates the file, then retry."
+}
+
+# ── hub.db (Hub 3.21+) ────────────────────────────────────────────────────────
+# The Hub keeps the list in SQLite once its one-time JSON import has run. Until
+# then (or on older Hubs) the JSON is still the source of truth. See the header.
+
+# Escape a value for a single-quoted SQL literal.
+sql_quote() { printf "%s" "$1" | sed "s/'/''/g"; }
+
+# sqlite3 with a busy timeout: the Hub may hold the DB while it is running.
+hub_sql() { sqlite3 -cmd '.timeout 5000' "$HUB_DB" "$@"; }
+
+# Which store will the Hub actually read at its next launch? One of:
+#   none          no hub.db — a pre-3.21 Hub, the JSON is the list
+#   nosqlite      hub.db exists but we have no sqlite3 to reach it
+#   unreadable    hub.db exists but will not answer (corrupt, or locked past
+#                 the busy timeout by a Hub mid-write)
+#   unmigrated    hub.db exists but has not imported the JSON yet, so the JSON
+#                 is still the list and the Hub will import it at next launch
+#   authoritative hub.db is the list
+# The two failure states matter: a JSON-only write there looks like it worked
+# and then undoes itself, which is the bug this script used to have.
+DB_STATE=""
+db_probe() {
+    [ -n "$DB_STATE" ] && return 0
+    if [ ! -f "$HUB_DB" ]; then DB_STATE=none; return 0; fi
+    if ! command -v sqlite3 >/dev/null 2>&1; then DB_STATE=nosqlite; return 0; fi
+    if ! hub_sql "SELECT count(*) FROM projects;" >/dev/null 2>&1; then
+        DB_STATE=unreadable; return 0
+    fi
+    if [ -n "$(hub_sql "SELECT value FROM meta WHERE key='projects_json_migrated';" 2>/dev/null)" ]; then
+        DB_STATE=authoritative
+    else
+        DB_STATE=unmigrated
+    fi
+}
+
+db_authoritative() { db_probe; [ "$DB_STATE" = authoritative ]; }
+
+# Refuse to write when hub.db is the list but we cannot reach it. Falling back
+# to the JSON would put the entry somewhere this Hub only reads as a startup
+# cache — it would appear, then vanish seconds later. An error beats that.
+db_require_usable() {
+    db_probe
+    case "$DB_STATE" in
+        none|authoritative) return 0 ;;
+        unmigrated)
+            echo -e "${YELLOW}hub.db exists but has not imported projects-v1.json yet;"
+            echo -e "writing the JSON, which the Hub will import at its next launch.${NC}"
+            ;;
+        nosqlite)
+            die "This Unity Hub keeps its project list in
+  $HUB_DB
+but sqlite3 is not installed, so it cannot be written. Writing only
+projects-v1.json would make entries appear in the Hub and then vanish a few
+seconds later, because this Hub uses that file as a startup cache.
+Install sqlite3 (brew install sqlite) and retry."
+            ;;
+        unreadable)
+            die "Could not read
+  $HUB_DB
+It may be corrupt, or Unity Hub may be holding it. Quit Unity Hub and retry —
+or use --restart, which quits it for you. Refusing to write projects-v1.json
+instead, because this Hub treats that file as a startup cache only, so the
+entry would appear and then vanish."
+            ;;
+    esac
+}
+
+# The stored entity for a path, or empty when the row is absent.
+db_get() {
+    db_authoritative || return 1
+    hub_sql "SELECT data FROM projects WHERE path='$(sql_quote "$1")';" 2>/dev/null
+}
+
+db_upsert() {
+    local path="$1" data="$2" now="$3"
+    db_authoritative || return 1
+    hub_sql "INSERT INTO projects (path, data, updated_at)
+             VALUES ('$(sql_quote "$path")', '$(sql_quote "$data")', $now)
+             ON CONFLICT(path) DO UPDATE SET data=excluded.data,
+                                             updated_at=excluded.updated_at;" \
+        || die "could not write $path to $HUB_DB"
+}
+
+db_delete() {
+    db_authoritative || return 1
+    hub_sql "DELETE FROM projects WHERE path='$(sql_quote "$1")';" \
+        || die "could not remove $1 from $HUB_DB"
+}
+
+db_paths() {
+    db_authoritative || return 1
+    hub_sql "SELECT path FROM projects;" 2>/dev/null
 }
 
 # Is this folder a Unity project?
@@ -144,8 +283,8 @@ start_hub_if_asked() {
 warn_if_hub_running() {
     [ "$RESTART_HUB" = true ] && return 0
     if hub_is_running; then
-        echo -e "${YELLOW}Unity Hub is running — it reads this list only at launch and rewrites"
-        echo -e "it from memory, so restart the Hub to see (and keep) the change.${NC}"
+        echo -e "${YELLOW}Unity Hub is running — it loads the project list at launch and keeps it"
+        echo -e "in memory, so the change is invisible until you restart the Hub.${NC}"
         echo -e "${BLUE}  a_s_unity_hub add <path> --restart${NC}   does that for you."
     fi
 }
@@ -176,26 +315,30 @@ cmd_add() {
     # at the Hub's next launch anyway (see the note in --help).
     title=$(basename "$path")
 
-    local now updated
+    local now existing src entity updated
     now=$(( $(date +%s) * 1000 ))
 
-    updated=$(jq -c \
+    # Read whatever is already stored, from whichever store the Hub will read.
+    existing=$(read_entity "$path")
+    src="{}"
+    [ -n "$donor" ] && src=$(read_entity "$donor")
+
+    entity=$(jq -nc \
         --arg path "$path" \
         --arg parent "$parent" \
         --arg version "$version" \
         --arg changeset "$changeset" \
         --arg title "$title" \
-        --arg donor "$donor" \
+        --argjson src "$src" \
+        --argjson existing "$existing" \
         --argjson now "$now" '
         # Fields the Hub copies from the main checkout when one is listed:
         # they identify the Unity cloud project, which a worktree shares.
-        (if $donor == "" then {} else (.data[$donor] // {}) end) as $src
-        | ($src | {genesisOrgId, cloudProjectId, organizationId, localProjectId,
-                   cloudEnabled, projectName, organizationName, buildTarget,
-                   renderPipeline}
-                | with_entries(select(.value != null))) as $inherited
-        | (.data[$path] // {}) as $existing
-        | .data[$path] = ({
+        ($src | {genesisOrgId, cloudProjectId, organizationId, localProjectId,
+                 cloudEnabled, projectName, organizationName, buildTarget,
+                 renderPipeline}
+              | with_entries(select(.value != null))) as $inherited
+        | ({
               isCustomEditor: false,
               isFavorite: false,
               cloudEnabled: true,
@@ -215,15 +358,41 @@ cmd_add() {
               lastModified: $now
           }
           + (if ($existing | has("title")) then {} else {title: $title, hasCustomDisplayName: false} end))
-        ' "$HUB_JSON") || die "jq failed while updating the project list"
+        ') || die "jq failed while building the project entry"
 
+    # hub.db first — it is what the Hub loads. The JSON is kept in step so the
+    # Hub's first-paint cache does not disagree with what loads a moment later.
+    db_upsert "$path" "$entity" "$now"
+
+    updated=$(jq -c --arg p "$path" --argjson e "$entity" '.data[$p] = $e' "$HUB_JSON") \
+        || die "jq failed while updating $HUB_JSON"
     write_hub_json "$updated"
 
-    if jq -e --arg p "$path" '.data[$p]' "$HUB_JSON" >/dev/null 2>&1; then
-        echo -e "${GREEN}✓ Unity Hub: $(jq -r --arg p "$path" '.data[$p].title' "$HUB_JSON")${NC}"
-        echo "  $path  ($version)"
+    if ! verify_entry "$path"; then
+        die "entry did not land in the Unity Hub project list"
+    fi
+    echo -e "${GREEN}✓ Unity Hub: $(printf '%s' "$entity" | jq -r '.title')${NC}"
+    echo "  $path  ($version)"
+}
+
+# The stored entity for a path from the authoritative store, "{}" when absent.
+read_entity() {
+    local raw
+    if db_authoritative; then
+        raw=$(db_get "$1")
+        [ -n "$raw" ] && { printf '%s' "$raw"; return; }
+        # Fall through: the DB may not have it yet, but the JSON might still
+        # carry a title/favorite the user set before the 3.21 migration.
+    fi
+    jq -c --arg p "$1" '(.data[$p] // {})' "$HUB_JSON" 2>/dev/null || echo '{}'
+}
+
+# Did the entry land where the Hub will read it?
+verify_entry() {
+    if db_authoritative; then
+        [ -n "$(db_get "$1")" ]
     else
-        die "entry did not land in $HUB_JSON"
+        jq -e --arg p "$1" '.data[$p]' "$HUB_JSON" >/dev/null 2>&1
     fi
 }
 
@@ -235,13 +404,30 @@ cmd_remove() {
     path=$(cd "$raw" 2>/dev/null && pwd) || path="${raw%/}"
     require_hub_json
 
-    if ! jq -e --arg p "$path" 'has("data") and (.data | has($p))' "$HUB_JSON" >/dev/null 2>&1; then
+    local in_db=false in_json=false
+    verify_entry "$path" && in_db=true
+    jq -e --arg p "$path" 'has("data") and (.data | has($p))' "$HUB_JSON" >/dev/null 2>&1 && in_json=true
+
+    if [ "$in_db" = false ] && [ "$in_json" = false ]; then
         echo -e "${BLUE}Not listed in Unity Hub, nothing to remove: $path${NC}"
         return 0
     fi
-    updated=$(jq -c --arg p "$path" 'del(.data[$p])' "$HUB_JSON") || die "jq failed"
-    write_hub_json "$updated"
+
+    db_delete "$path"
+    if [ "$in_json" = true ]; then
+        updated=$(jq -c --arg p "$path" 'del(.data[$p])' "$HUB_JSON") || die "jq failed"
+        write_hub_json "$updated"
+    fi
     echo -e "${GREEN}✓ Removed from Unity Hub: $path${NC}"
+}
+
+# Every path the Hub currently lists, from the authoritative store.
+listed_paths() {
+    if db_authoritative; then
+        db_paths
+    else
+        jq -r '.data | keys[]' "$HUB_JSON" 2>/dev/null
+    fi
 }
 
 # ── sync ──────────────────────────────────────────────────────────────────────
@@ -267,7 +453,7 @@ cmd_sync() {
                 [ -n "$dead" ] || continue
                 [ -d "$dead" ] && continue
                 cmd_remove "$dead"
-            done < <(jq -r --arg r "$root/" '.data | keys[] | select(startswith($r))' "$HUB_JSON")
+            done < <(listed_paths | awk -v r="$root/" 'index($0, r) == 1')
         fi
     done
 }
@@ -275,8 +461,18 @@ cmd_sync() {
 # ── list ──────────────────────────────────────────────────────────────────────
 cmd_list() {
     require_hub_json
-    jq -r '.data | to_entries[] | "\(.value.version)\t\(.value.title)\t\(.key)"' "$HUB_JSON" \
-        | sort -t$'\t' -k3 | column -t -s$'\t'
+    if db_authoritative; then
+        echo -e "${BLUE}Store: $HUB_DB${NC}"
+        sqlite3 -cmd '.timeout 5000' -separator $'\t' "$HUB_DB" \
+            "SELECT json_extract(data,'\$.version'),
+                    json_extract(data,'\$.title'),
+                    path
+             FROM projects ORDER BY path;" | column -t -s$'\t'
+    else
+        echo -e "${BLUE}Store: $HUB_JSON${NC}"
+        jq -r '.data | to_entries[] | "\(.value.version)\t\(.value.title)\t\(.key)"' "$HUB_JSON" \
+            | sort -t$'\t' -k3 | column -t -s$'\t'
+    fi
 }
 
 # ── argument parsing ──────────────────────────────────────────────────────────
@@ -301,6 +497,8 @@ case "$COMMAND" in
     add)
         [ ${#ARGS[@]} -ge 1 ] || die "add needs a project path"
         stop_hub_if_asked
+        # After the quit, so --restart can free a hub.db the Hub was holding.
+        db_require_usable
         cmd_add "${ARGS[0]}"
         warn_if_hub_running
         start_hub_if_asked
@@ -308,6 +506,8 @@ case "$COMMAND" in
     remove|rm)
         [ ${#ARGS[@]} -ge 1 ] || die "remove needs a project path"
         stop_hub_if_asked
+        # After the quit, so --restart can free a hub.db the Hub was holding.
+        db_require_usable
         cmd_remove "${ARGS[0]}"
         warn_if_hub_running
         start_hub_if_asked
@@ -326,6 +526,8 @@ case "$COMMAND" in
             echo -e "${BLUE}No root given — using ${ARGS[0]}${NC}"
         fi
         stop_hub_if_asked
+        # After the quit, so --restart can free a hub.db the Hub was holding.
+        db_require_usable
         cmd_sync "${ARGS[@]}"
         warn_if_hub_running
         start_hub_if_asked

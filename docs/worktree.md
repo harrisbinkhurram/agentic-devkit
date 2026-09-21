@@ -124,13 +124,29 @@ such as `ar-taskflow` or `ar-taskflow-resume`.
 ### Things worth knowing
 
 Unity Hub has no CLI for adding a project — its `--headless` interface only covers editors and
-install paths — so the helper edits the Hub's own project list at
-`~/Library/Application Support/UnityHub/projects-v1.json`, atomically, keeping a `.bak`.
+install paths — so the helper edits the Hub's own project list on disk.
 
-**The Hub reads that file only at launch** and rewrites it from memory afterwards. So a project
-added while the Hub is running appears the next time you open the Hub. Pass `--restart` to quit
-and reopen it right away; the quit happens *before* the write, because the Hub flushes its
-in-memory list on the way out and would otherwise overwrite the change.
+**Where that list lives changed in Hub 3.21.** Older Hubs keep it in
+`~/Library/Application Support/UnityHub/projects-v1.json`. Hub 3.21 moved it to SQLite at
+`~/Library/Application Support/UnityHub/hub.db` (table `projects`), imports the old JSON once,
+and records that in `meta.projects_json_migrated`. The helper checks that marker and writes
+whichever store the Hub will actually read, mirroring into the other. `a_s_unity_hub list` prints
+which store is in force. On 3.21+ it needs `sqlite3`; the JSON write is still atomic and keeps a
+`.bak`.
+
+That distinction matters because on 3.21+ `projects-v1.json` is no longer the list. It is a
+first-paint cache (read synchronously at window construction, first 20 entries) and a downgrade
+mirror (rewritten from memory on shutdown). **A JSON-only write there looks like it worked and
+then undoes itself**: the entry paints from the cache, and a few seconds later the project service
+finishes loading `hub.db` — `LocalProject: Forced refresh: Projects data will be re-collected` in
+the Hub log — and the renderer replaces the list with the DB's, which never had the entry. If
+projects show up in the Hub and vanish on refresh, this is why; check that `sqlite3` is installed
+and that `list` reports `hub.db` as the store.
+
+**The Hub loads the list at launch** and keeps it in memory. So a project added while the Hub is
+running appears the next time you open the Hub. Pass `--restart` to quit and reopen it right away;
+the quit happens *before* the write, because the Hub flushes its in-memory list on the way out and
+would otherwise overwrite the change.
 
 **The Hub names a project after its folder**, and re-derives that name at every launch for any
 entry it did not rename itself — an injected display name does not survive. That is fine in
