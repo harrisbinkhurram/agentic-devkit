@@ -104,6 +104,22 @@ Left behind, untracked in the base checkout and not ignored:
 `a_g_worktree_init --include-untracked` takes them anyway when you do want them. Uncommitted
 changes to *tracked* files never travel under any setting: the worktree is built from a commit.
 
+## Permission prompts in new worktrees
+
+Claude Code keys workspace trust to the main checkout, so a worktree does not ask to be trusted
+again. What does prompt is file access: a session started in one checkout asks before every read
+or edit in a worktree that lives outside it. Listing the worktree root (`<repos>/WorkTrees`) under
+`permissions.additionalDirectories` in your user settings stops that for every worktree made there
+later. The root is different on every machine, so it never goes into a project's settings.
+
+```bash
+scripts/a_s_worktree_access.sh check <worktree_path>   # "covered <root>" or "missing <root>"
+scripts/a_s_worktree_access.sh add <root>              # adds it, keeps the rest, writes a backup
+```
+
+`ar-taskflow` runs the check after it creates a worktree and asks before adding a missing root.
+`tests/test_worktree_access.sh` covers the helper.
+
 ## What stops you losing work
 
 - **Unpushed-commit warning** before any removal.
