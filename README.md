@@ -48,6 +48,11 @@ It will look at your actual machine and answer for your situation. When you are 
 **"set up my agentic devkit"** — or run `./install.sh` directly. It installs shared skills and
 native subagents for Claude, Codex, and AGY/Gemini, and tells you exactly what changed.
 
+For fewer approval interruptions, opt into [machine interaction modes](docs/agent-modes.md):
+`./install.sh --agent-mode agentic`. Modes preserve unrelated provider settings;
+`interactive` and `auto` cover developer-led and unattended work. Provider differences
+and project overrides are reported rather than silently enabling permission bypass.
+
 Later, useful things to say: **"my Claude config is a mess"** (`a_sk_tame_claude` audits and
 repairs it), or **"remember this"** (`a_sk_teach_claude` files what you just taught it in the
 right place, permanently).
@@ -96,7 +101,7 @@ safe to re-run, preserves handwritten guidance, and never overwrites your shell 
 Check it worked:
 
 ```bash
-a_c_workflow_doctor   # green ticks, or it tells you exactly what is wrong
+a_c_doctor   # green ticks, or what is wrong and the command that fixes it
 ```
 
 ## Keeping it up to date
@@ -121,9 +126,13 @@ git fetch upstream && git merge upstream/main
 If you also have a private overlay (see below), update it the same way — `git pull` then
 `./install.sh` inside that repo.
 
-**When in doubt, `a_c_workflow_doctor`.** It reports broken links, unmanaged files, whether your
-machine has an identity, and whether your memory has drifted from its sources. Anything it warns
-about tells you the command to fix it.
+**When in doubt, `a_c_doctor`.** `install.sh` runs it at the end, too. It checks that your shell
+loads the devkit, that the machine has a name, that the folders behind `cd_p` / `cd_w` / `cd_g`
+exist, whether the devkit, the overlays or the root repo have updates waiting (it fetches from
+each origin, `--offline` skips that), that every skill and agent is linked, and that the agent
+guidance matches its sources. Everything it flags comes with the command that fixes it.
+`a_c_workflow_doctor` adds the checks that need your live shell, such as functions loaded from
+the wrong clone, and then runs `a_c_doctor`.
 
 Two rules that keep updates painless:
 

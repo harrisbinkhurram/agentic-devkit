@@ -18,8 +18,8 @@ export A_ROOT_DIR=''
 ########################### Mode 2: standalone, no root repo ####
 # Only used when A_ROOT_DIR is empty. Set the values by hand instead.
 if [ -z "$A_ROOT_DIR" ]; then
-    # Machine type: 'm1' for Apple Silicon, 'i7' for Intel.
-    export a_machine_type='m1'
+    # OS family (macos, linux) and CPU (arm64, x64) are derived from `uname`. Set
+    # a_machine_type or a_machine_arch here only to force a different value.
     # Organization name. Loads <org>.<machine>.profile from your org overlay, if you have one.
     export a_company_name=''
 
@@ -32,8 +32,9 @@ if [ -z "$A_ROOT_DIR" ]; then
     export MY_WORKFLOW_DIR="${a_dir_p_repos}/agentic-devkit"
 
     # This machine's name, as an agent should introduce it. It does not have to match
-    # the hostname. Selects machine/$A_MACHINE_NAME.md in your overlay.
-    export A_MACHINE_NAME=''
+    # the hostname. Selects machine/$MACHINE_NAME.md in your overlay. install.sh asks
+    # for it when it is empty. (Older profiles set A_MACHINE_NAME, which still works.)
+    export MACHINE_NAME=''
 
     # Optional overlays and brain. Empty is fine, the build still works without them.
     export A_AGENT_OVERLAY_DIR=''
@@ -46,6 +47,10 @@ if [ -z "$A_ROOT_DIR" ]; then
 fi
 
 ########################### Optional: task suite defaults ####
+# Machine permission defaults: interactive, agentic, or auto. Opt-in; unset
+# preserves provider settings. With a root repo, put this in root.local.config.
+# export A_AGENT_MODE='agentic'
+# Apply with ./install.sh; see docs/agent-modes.md for session overrides.
 # Default zellij session for every task start. Unset keeps tasks in this terminal.
 # export A_C_TASK_ZELLIJ_SESSION='work'
 # Default ticket project key, so a bare number resolves (123 -> PROJ-123).

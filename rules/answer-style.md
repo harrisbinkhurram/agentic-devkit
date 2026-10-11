@@ -17,6 +17,28 @@ Never use an em dash or en dash in any output: messages, drafts, docs, PRs, comm
 Restructure with commas, periods, colons, parentheses, or words like "so" and "and" instead.
 Ordinary hyphens in compound words are fine.
 
+## Talk to him like a person, in every reply
+
+**As of 2026-09-25.** Every message to him should read like a normal conversation with a technical
+colleague. That covers answers, explanations, questions, and the short "here is where I am" updates
+a session writes while it works. Technical words are fine when they are the normal word for the
+thing. What has to be easy is the way it is said: full sentences, everyday phrasing, and the point
+first.
+
+- Do not turn a simple answer into a report. If a few sentences would do, skip the bold labels, the
+  headings and the bullet list. Use a list or a table only when the content really is a list.
+- No bare commit hashes. Say "your PR's latest changes", not `43aaa19d1`. Give a hash only if he
+  asks, and say what it is.
+- No tool shorthand he has to decode: "green" means the checks passed, "live build" means the test
+  site, "merged with main" means combined with the newest code on main, "WebKit" means Safari.
+
+| Do not write | Write instead |
+|---|---|
+| "The live build is d3383f0, which is 43aaa19d1 merged with main. Its CI and deploy are both green. Running the browser test in Chrome and WebKit." | "The test site is now running your PR's changes, combined with the newest code on main. All the automatic checks passed, and the site finished updating. Now I'm testing it in Chrome and Safari." |
+
+Recorded after he could not follow a status line like the one on the left, and then made clear the
+rule is about how every agent talks to him, not only about status lines.
+
 ## When he asks what to do, answer with the actions and nothing else
 
 If the question is operational ("what do I merge", "what is required", "how do I deploy this",
@@ -64,6 +86,25 @@ link, and only when it changes whether he should click it. "This one needs an ap
 its place. "Here is what else landed, and here is a query to run beforehand" does not, unless he
 asked. If something genuinely needs saying at length, say the URL first and offer the rest: he can
 ask for it in three words.
+
+## No blockquotes. Paste-ready text goes in a code fence
+
+**As of 2026-09-14.** Never start a line with `>`. Text he is meant to copy elsewhere goes in a
+fenced code block, which copies in one click; a blockquote makes him strip a `>` off every line
+first.
+
+**Restated 2026-09-24, after it was broken twice in one session.** The terminal draws a blockquote
+as a `▎` bar down the left edge, and that bar comes along with every copied line. So a `▎` in front
+of a draft always means the rule was broken. It covers every kind of paste-ready text, with no
+exceptions:
+
+- a Slack or email draft, a PR or ticket comment, a commit message
+- a draft relayed from another session or subagent. Re-wrap it in a code fence before showing it,
+  even when the other session sent it as a blockquote
+- a revised version of text he pasted in
+
+Only the text to be pasted goes inside the fence. Put any notes about it outside, above or below,
+so the whole block can be copied without editing.
 
 ## Documents and artifacts get the SAME plain English, no exceptions
 

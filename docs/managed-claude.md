@@ -98,7 +98,7 @@ rules do not. That is the last unmanaged thing in an otherwise managed setup.
 | Block | Source | Layer |
 |---|---|---|
 | core rules | `agentic-devkit/memory/core-rules.md` | core (public, generic) |
-| machine identity | `<overlay>/machine/<A_MACHINE_NAME>.md` | overlay (private) |
+| machine identity | `<overlay>/machine/<MACHINE_NAME>.md` | overlay (private) |
 | personal rules | `<overlay>/machine/rules.md` | overlay (private) |
 | glossary | `<overlay>/machine/glossary.md` | overlay (private) |
 | pointers | generated from the configured repo paths | — |
@@ -112,9 +112,39 @@ a_c_agent_memory check    # exit 1 on drift (used by a_c_workflow_doctor)
 
 Everything it writes sits between `agentic-devkit: managed memory` markers. **Text outside the
 markers is never touched** — adopting an existing hand-written file keeps that file, verbatim,
-below the generated region. Three variables in `configs.profile` drive it: `A_MACHINE_NAME`,
+below the generated region. Three variables in `configs.profile` drive it: `MACHINE_NAME` (read as `A_MACHINE_NAME`),
 `A_AGENT_OVERLAY_DIR`, `A_AGENT_BRAIN_DIR`. With none of them set you still get valid files
 from the core rules alone.
+
+When `MACHINE_NAME` is missing, `install.sh` asks for it in the console and saves it: to
+`root.local.config` when there is a root repo, otherwise to `~/my_settings/configs.profile`,
+above the hand-off to `bootstrap.profile`.
+
+If `~/.config/starship.toml` exists (or `$STARSHIP_CONFIG`), `install.sh` also puts the name in
+the prompt, in grey, but only when the prompt shows no machine name yet. A top-level `format`
+that already has `$hostname` or `${custom.machine}` is left as it is, colours included.
+Otherwise it adds a `[custom.machine]` module and prepends `${custom.machine}` to the format.
+It backs the file up before the change, touches nothing else, and a second run changes
+nothing. With no name set, the module shows the OS hostname.
+
+Any other zsh or bash prompt (oh-my-zsh, a theme, a hand-written `PROMPT`) gets the name from
+`sourced/prompt.sh`, which `generic.profile` loads. It adds `@<name>` in grey at the start of
+`PROMPT` / `PS1` from a hook that runs just before each prompt is drawn, so it lands after the
+theme and anything else in `.zshrc`, and never twice. If the prompt already contains the
+name, for example a coloured name line in `.zshrc`, it adds nothing.
+
+To give the name a colour, or to rename the machine, use `a_c_machine`:
+
+```bash
+a_c_machine                  # show the name, the colour, and what draws the prompt
+a_c_machine color orange     # colour the name (a_c_machine colors lists the names)
+a_c_machine name WORK-LAPTOP # rename this machine and redraw the prompt
+```
+
+It saves `MACHINE_COLOR` next to `MACHINE_NAME` and draws the prompt the same way fleetkit
+does, so the two never show the name twice: the marked `PROMPT` line in `.zshrc` for zsh, the
+`[hostname]` module for starship. With fleetkit cloned next to the devkit it uses fleetkit's
+colour names. `A_PROMPT_MACHINE_NAME=0` turns it off.
 
 ### Machine identity
 

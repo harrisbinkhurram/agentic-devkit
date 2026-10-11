@@ -85,6 +85,33 @@ final report.
 "Hand this over", "run these in parallel", and "keep an eye on them" are asking for sessions. Read
 them that way even when the work looks like something a subagent could carry.
 
+**The same holds against doing it inline.** When a session that is already busy with something else
+(monitoring a release, answering a bug report, coordinating other lanes) finds a new piece of work
+that will end in its own PR, it starts a session for it instead of branching and coding in place.
+It writes a brief with everything it already found (the cause, the call sites, the traps, how to
+verify), launches the session with `a_c_task_start -c -z <session> --task-file <brief>`, and then
+supervises it: it answers the new session's questions, checks its reports, and passes results to
+the user.
+
+- **One lane at a time.** Start the next session only after the current one is running on its
+  own, and don't have several going at once unless the user asks for it.
+- **Only for a real task.** A proper change with its own PR qualifies. A one-line fix, a comment
+  reply, or a follow-up commit on a branch this session already owns does not, so do that directly.
+
+Recorded 2026-09-30, after a session that was handling a production bug report started editing a
+fresh branch for the fix itself, when the user wanted it handed to its own tab and supervised.
+
+### Messaging another session when its name does not resolve
+
+Some Claude Code versions start sessions that never register their name, so `ListAgents` does not
+show them and `SendMessage` to the name fails with "No agent named ... is reachable", even though
+the session is alive and its socket accepts messages. When that happens, do not conclude the
+session is gone: run `a_s_session_address <name>` and send to the `uds:` address it prints
+(`a_s_session_address --list` shows every live session it can find). When you start a session that
+is expected to report back, put your own `uds:` address in its brief next to your name, so the
+reply still arrives. It is `uds:$CLAUDE_CODE_MESSAGING_SOCKET`, or `a_s_session_address <your name>`.
+To answer a message you received, reply to its `from=` address, which already works.
+
 ### A tab is `a_c_zellij_tab`, never hand-rolled zellij
 
 Anything that wants a tab calls **`a_c_zellij_tab`**, including "open a new tab", "give it its own
@@ -118,6 +145,31 @@ the repo: a commit beats an issue.
 The tracker is **public**. Describe the problem in generic terms and never paste employer, client,
 project, host, ticket or colleague names into it. If it cannot be described without them, do not
 file it, and say why.
+
+### A status is verified, or it says "not confirmed"
+
+Any claim about the state of something (deployed, merged, running, passing, done, owned) is checked
+against its system of record in this session before it is stated, and the answer says where it was
+checked. What was not checked is written as **"not confirmed"**, never as a negative such as "not
+yet" or "not deployed". A signal that only suggests the state is not the state: a merge, a release
+tag, a branch that contains the commit, a green CI run, or a passing deploy job can each be true
+while the thing is still not live. Before a status reaches other people (a page, a message, a
+ticket), re-check every negative claim, because a wrong "not done" lands as an accusation against
+whoever owns it. Recorded 2026-09-30, after a published status page called two teams' deployed
+changes undeployed.
+
+**A peer's finding is a lead, not a fact.** When another session or a subagent reports something,
+check which branch, repo or system it actually looked at before repeating it. "Not on the
+`development` branch" is not the same as "not done": the work can sit in an open PR or a release
+branch. Check open PRs and release branches before saying something is missing.
+
+### Before sending a value to more places, find who reads it
+
+When a report says a value (a header, an id, a field) is missing from some calls, first check
+whether anything on the receiving side reads it there: search the backend code for the name. If
+nothing consumes it, the missing value is harmless, and the answer is "by design", not a sweep and a
+PR. Do this cheap check before planning call sites, CORS or tests. Recorded 2026-09-30, after a
+two-hour sweep planned a change that no backend would have used.
 
 ### Knowledge placement — where a new fact goes
 

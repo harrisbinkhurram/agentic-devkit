@@ -5,8 +5,10 @@
 #   ./install.sh              Wire shell + install Claude, Codex, and Gemini assets
 #   ./install.sh --provider X Install all, claude, codex, agy, gemini-cli, or gemini
 #   ./install.sh --link-only  Skip shell wiring; just (re)link agent assets
+#   ./install.sh --agent-mode MODE  Install interactive, agentic, or auto defaults
 #   ./install.sh -n           Dry run: print what would change, touch nothing
-#   ./install.sh -f           Force: repoint skill/agent links that point elsewhere
+#   ./install.sh -f           Force: also repoint links into another known repo
+#                             (links from a moved or retired checkout are repointed anyway)
 #   ./install.sh -h           Show this help
 #
 # It is idempotent: safe to re-run any time (e.g. after `git pull`) to pick up
@@ -37,6 +39,7 @@ LINK_ONLY=false
 DRY_RUN=false
 FORCE=false
 PROVIDER=all
+AGENT_MODE_ARG=""
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//; /^set -euo/d'; }
 
@@ -46,6 +49,9 @@ while [ "$#" -gt 0 ]; do
         --provider|--providers)
             [ "$#" -ge 2 ] || { echo -e "${RED}$1 needs a value${NC}"; exit 1; }
             PROVIDER="$2"; shift ;;
+        --agent-mode)
+            [ "$#" -ge 2 ] || { echo "$1 needs a value" >&2; exit 1; }
+            AGENT_MODE_ARG="$2"; shift ;;
         -n|--dry-run)  DRY_RUN=true ;;
         -f|--force)    FORCE=true ;;
         -h|--help)     usage; exit 0 ;;
@@ -57,6 +63,10 @@ done
 case "$PROVIDER" in
     all|claude|codex|agy|gemini|gemini-cli) ;;
     *) echo -e "${RED}Unknown provider: $PROVIDER${NC}"; exit 1 ;;
+esac
+case "$AGENT_MODE_ARG" in
+    ""|interactive|agentic|auto) ;;
+    *) echo "Invalid --agent-mode: $AGENT_MODE_ARG" >&2; exit 1 ;;
 esac
 
 say()  { echo -e "$@"; }
@@ -221,6 +231,239 @@ memory_provider() {
 }
 
 # ---------------------------------------------------------------------------
+# Machine config for a shell that has not loaded the profile yet.
+#
+# On a brand new machine install.sh runs before the profile was ever sourced, so
+# nothing is exported: no machine name, no overlays, no brains. The guidance build
+# then refuses once per provider. Read the same files the profile would read, and
+# ask for the machine name when none is configured. The name is typed by the
+# user, never derived from the hostname.
+# ---------------------------------------------------------------------------
+
+# Last `[export ]KEY=value` assignment of KEY in FILE, quotes stripped. No eval.
+read_assignment() {
+    local key="$1" file="$2" line
+    [ -f "$file" ] || return 0
+    line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?$key=" "$file" | tail -n 1)" || true
+    line="${line#*=}"
+    line="${line%%#*}"
+    line="$(printf '%s' "$line" | sed -e 's/[[:space:]]*$//' -e "s/^[\"']//" -e "s/[\"']\$//")"
+    printf '%s' "${line/#\~/$HOME}"
+}
+
+# The personal profile this machine sources (root-repo form first).
+settings_profile() {
+    local f
+    for f in "$HOME/my_settings/a_configs.profile" "$HOME/my_settings/configs.profile"; do
+        [ -f "$f" ] && { echo "$f"; return 0; }
+    done
+    return 0
+}
+
+load_machine_config() {
+    local profile root
+    profile="$(settings_profile)"
+    root="${A_ROOT_DIR:-}"
+    [ -n "$root" ] || root="$(read_assignment A_ROOT_DIR "${profile:-/dev/null}")"
+
+    if [ -n "$root" ] && [ -f "$root/root.config" ]; then
+        export A_ROOT_DIR="$root"
+        # Not loaded by the shell yet? Then do what shell/bootstrap.profile does:
+        # local first, then root.config, then map the roles.
+        if [ -z "${MY_WORKFLOW_DIR:-}" ]; then
+            set +u
+            [ -f "$root/root.local.config" ] && source "$root/root.local.config"
+            source "$root/root.config"
+            set -u
+            export A_AGENT_OVERLAY_DIR="${PRIVATE_DEVKIT_DIR:-${A_AGENT_OVERLAY_DIR:-}}"
+            export A_AGENT_ORG_OVERLAY_DIR="${ORG_DEVKIT_DIR:-${A_AGENT_ORG_OVERLAY_DIR:-}}"
+            export A_AGENT_ORG_BRAIN_DIR="${ORG_BRAIN_DIR:-${A_AGENT_ORG_BRAIN_DIR:-}}"
+            export A_AGENT_BRAIN_DIR="${PRIVATE_BRAIN_DIR:-${A_AGENT_BRAIN_DIR:-}}"
+            export A_MACHINE_NAME="${MACHINE_NAME:-${A_MACHINE_NAME:-}}"
+        fi
+    elif [ -z "${A_MACHINE_NAME:-}" ]; then
+        # Standalone: the name is set by hand in the profile. MACHINE_NAME is the key,
+        # A_MACHINE_NAME is what older profiles used.
+        local name="${MACHINE_NAME:-}"
+        if [ -z "$name" ] && [ -n "$profile" ]; then
+            name="$(read_assignment MACHINE_NAME "$profile")"
+            [ -n "$name" ] || name="$(read_assignment A_MACHINE_NAME "$profile")"
+        fi
+        [ -n "$name" ] && export A_MACHINE_NAME="$name"
+    fi
+    [ -n "${A_MACHINE_NAME:-}" ] && export MACHINE_NAME="$A_MACHINE_NAME"
+    # This setting is opt-in. Read it even when the shell already knows the
+    # machine name, and let an explicit installer flag win over machine defaults.
+    if [ -z "${A_AGENT_MODE:-}" ]; then
+        local mode_file="${profile:-/dev/null}"
+        [ -n "$root" ] && mode_file="$root/root.local.config"
+        A_AGENT_MODE="$(read_assignment A_AGENT_MODE "$mode_file")"
+    fi
+    [ -z "$AGENT_MODE_ARG" ] || A_AGENT_MODE="$AGENT_MODE_ARG"
+    case "${A_AGENT_MODE:-}" in
+        ""|interactive|agentic|auto) ;;
+        *) echo "Invalid A_AGENT_MODE: $A_AGENT_MODE" >&2; return 1 ;;
+    esac
+    [ -z "${A_AGENT_MODE:-}" ] || export A_AGENT_MODE
+    return 0
+}
+
+install_agent_mode() {
+    [ -n "${A_AGENT_MODE:-}" ] || return 0
+    step "Agent mode ($A_AGENT_MODE)"
+    local flags=()
+    $DRY_RUN && flags+=(--dry-run)
+    "$REPO_ROOT/scripts/a_c_agent_mode" install --mode "$A_AGENT_MODE" \
+        --provider "$PROVIDER" ${flags[@]+"${flags[@]}"}
+}
+
+# Where the machine name is stored on this machine, for messages and for saving.
+machine_name_home() {
+    if [ -n "${A_ROOT_DIR:-}" ] && [ -f "$A_ROOT_DIR/root.config" ]; then
+        echo "$A_ROOT_DIR/root.local.config"
+    else
+        settings_profile
+    fi
+}
+
+# Write KEY="value" into FILE: replace the existing line, or append one.
+save_assignment() {
+    local key="$1" value="$2" file="$3" prefix="$4" tmp
+    if [ -f "$file" ] && grep -Eq "^[[:space:]]*(export[[:space:]]+)?$key=" "$file"; then
+        tmp="$(mktemp)"
+        sed -E "s|^([[:space:]]*)(export[[:space:]]+)?$key=.*|\1\2$key=\"$value\"|" "$file" > "$tmp"
+        cat "$tmp" > "$file" && rm -f "$tmp"
+    else
+        printf '%s%s="%s"\n' "$prefix" "$key" "$value" >> "$file"
+    fi
+}
+
+# A line that sets the name, with the current key or the older A_MACHINE_NAME.
+NAME_LINE_RE='^[[:space:]]*(export[[:space:]]+)?(A_)?MACHINE_NAME='
+
+# First non-comment line of a profile that hands off to the shared shell layer.
+# An older standalone profile sources generic.profile directly, a newer one
+# bootstrap.profile, and the root-repo form reads root.config.
+profile_handoff_line() {
+    awk '!/^[[:space:]]*#/ && /root\.config|bootstrap\.profile|generic\.profile/ { print NR; exit }' "$1"
+}
+
+# True when a line setting the name sits below the hand-off, so the shell layer
+# has already loaded by the time it runs.
+profile_name_misplaced() {
+    local h; h="$(profile_handoff_line "$1")"
+    [ -n "$h" ] || return 1
+    awk -v h="$h" -v re="$NAME_LINE_RE" 'FNR > h && $0 ~ re { found = 1 } END { exit !found }' "$1"
+}
+
+# Save a standalone profile's name as MACHINE_NAME, above the hand-off:
+#   - a MACHINE_NAME line above it is updated in place,
+#   - else an older A_MACHINE_NAME line above it is renamed in place,
+#   - else a new line goes right above the hand-off (at the end if there is none).
+# Name lines below the hand-off are removed, since the shell reads them too late.
+save_profile_name() {
+    local name="$1" file="$2" h tmp
+    h="$(profile_handoff_line "$file")"
+    tmp="$(mktemp)"
+    awk -v h="${h:-0}" -v re="$NAME_LINE_RE" -v name="$name" '
+        function above(n) { return h == 0 || n < h }
+        # Pass 1: find the line to keep.
+        NR == FNR {
+            if ($0 ~ re && above(FNR)) {
+                if ($0 ~ /A_MACHINE_NAME=/) { if (!old) old = FNR }
+                else if (!cur) cur = FNR
+            }
+            next
+        }
+        FNR == 1 { target = cur ? cur : old }
+        # Pass 2: write it out.
+        FNR == target {
+            match($0, /^[[:space:]]*(export[[:space:]]+)?/)
+            print substr($0, 1, RLENGTH) "MACHINE_NAME=\"" name "\""
+            next
+        }
+        FNR == h && !target { print "export MACHINE_NAME=\"" name "\""; print "" }
+        h && FNR > h && $0 ~ re { next }
+        { print }
+        END { if (!h && !target) print "export MACHINE_NAME=\"" name "\"" }
+    ' "$file" "$file" > "$tmp"
+    cat "$tmp" > "$file" && rm -f "$tmp"
+}
+
+# Make sure A_MACHINE_NAME is set, asking for it if needed. Returns 1 to skip the build.
+ensure_machine_name() {
+    local home; home="$(machine_name_home)"
+    local is_root=false
+    [ -n "${A_ROOT_DIR:-}" ] && [ -f "$A_ROOT_DIR/root.config" ] && is_root=true
+
+    if [ -n "${A_MACHINE_NAME:-}" ]; then
+        export MACHINE_NAME="$A_MACHINE_NAME"
+        # A name line below the hand-off (older installs appended it there) is read
+        # too late by the shell layer. Move it up.
+        if ! $is_root && [ -n "$home" ] && profile_name_misplaced "$home"; then
+            if $DRY_RUN; then
+                say "  ${DIM}would move${NC} MACHINE_NAME above the hand-off ${DIM}in $home${NC}"
+            else
+                save_profile_name "$A_MACHINE_NAME" "$home"
+                say "  ${GREEN}moved${NC}     MACHINE_NAME above the hand-off ${DIM}in $home${NC}"
+            fi
+        fi
+        return 0
+    fi
+
+    say "  ${YELLOW}!${NC} This machine has no name yet. Agents use it to say which machine they are on."
+    if $DRY_RUN; then
+        say "  ${DIM}would ask for it, save it to ${home:-your profile}, and build the guidance${NC}"
+        return 1
+    fi
+    if [ ! -t 0 ]; then
+        say "  Skipping the guidance build. Set the name, then build:"
+        if $is_root; then
+            say "    ${GREEN}echo 'MACHINE_NAME=\"<name>\"' >> $home${NC}"
+        else
+            say "    ${GREEN}set MACHINE_NAME in ${home:-~/my_settings/configs.profile}${NC}"
+        fi
+        say "    ${GREEN}$REPO_ROOT/install.sh --link-only${NC}"
+        return 1
+    fi
+
+    say "  ${DIM}Pick any name you like, for example WORK-LAPTOP. It does not have to match the hostname.${NC}"
+    say "  ${DIM}Letters, digits, dots, dashes and underscores. Press Enter to skip for now.${NC}"
+    local name=""
+    while :; do
+        read -r -p "  Machine name: " name || name=""
+        [ -z "$name" ] && break
+        [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] && break
+        say "  ${RED}Only letters, digits, dots, dashes and underscores.${NC}"
+    done
+    if [ -z "$name" ]; then
+        say "  Skipped. Run ${GREEN}$REPO_ROOT/install.sh --link-only${NC} again when you have a name."
+        return 1
+    fi
+
+    export A_MACHINE_NAME="$name" MACHINE_NAME="$name"
+    if $is_root; then
+        if [ ! -f "$home" ]; then
+            {
+                echo "# This machine only. Never committed. Overrides root.config."
+                echo "# Loaded BEFORE root.config, whose keys are all \${KEY:-default}, so these win and"
+                echo "# every path derived from it follows."
+                echo ""
+            } > "$home"
+        fi
+        save_assignment MACHINE_NAME "$name" "$home" ""
+        say "  ${GREEN}saved${NC}     MACHINE_NAME=\"$name\" ${DIM}in $home${NC}"
+    elif [ -n "$home" ]; then
+        save_profile_name "$name" "$home"
+        say "  ${GREEN}saved${NC}     MACHINE_NAME=\"$name\" ${DIM}in $home${NC}"
+    else
+        say "  ${YELLOW}!${NC} no profile to save it in, so it is used for this run only."
+        say "    ${DIM}Add export MACHINE_NAME=\"$name\" to your shell profile to keep it.${NC}"
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # 3. Tell the user about the optional always-on bits.
 #
 # Deliberately NOT auto-installed: these are background services (a launchd job,
@@ -257,11 +500,152 @@ suggest_extras() {
     say "${DIM}Details, including what is exposed on the network: docs/claude-sessions.md${NC}"
 }
 
+# ---------------------------------------------------------------------------
+# 4. Show the machine name in the starship prompt, in grey.
+#
+# Only for a prompt that shows no machine name at all: a format that already has
+# $hostname or ${custom.machine} is left exactly as it is, colours included.
+# Only runs when a starship config already exists; touches nothing else in it.
+# ---------------------------------------------------------------------------
+
+# "start end" line numbers of the top-level format value, or nothing if there is none.
+starship_format_range() {
+    awk '
+        inml { if (index($0, q)) { print start, NR; exit } next }
+        /^[[:space:]]*\[/ { exit }
+        /^[[:space:]]*format[[:space:]]*=/ {
+            start = NR; v = $0; sub(/^[^=]*=[[:space:]]*/, "", v)
+            q = substr(v, 1, 3)
+            if ((q == "\"\"\"" || q == "'"'''"'") && index(substr(v, 4), q) == 0) { inml = 1; next }
+            print start, NR; exit
+        }' "$1"
+}
+
+configure_starship_prompt() {
+    local file="${STARSHIP_CONFIG:-$HOME/.config/starship.toml}"
+    [ -f "$file" ] || return 0
+
+    step "Shell prompt (starship)"
+    local range s e changes=() hint="" tmp
+    local add_block=false fmt_action=""
+
+    range="$(starship_format_range "$file")"
+    if [ -z "$range" ]; then
+        hint="no top-level format line, so the format is left alone. Add \${custom.machine} to it to place the name."
+    else
+        s="${range% *}"; e="${range#* }"
+        # A name the prompt already shows (in its own style) is kept, not replaced.
+        if ! sed -n "${s},${e}p" "$file" | grep -Fq -e '${custom.machine}' -e '$hostname'; then
+            fmt_action=prepend
+            grep -Eq '^[[:space:]]*\[custom\.machine\][[:space:]]*$' "$file" || add_block=true
+        fi
+    fi
+
+    $add_block && changes+=("add a [custom.machine] module (MACHINE_NAME in grey)")
+    [ "$fmt_action" = prepend ] && changes+=("prepend \${custom.machine} to format")
+
+    if [ "${#changes[@]}" -eq 0 ]; then
+        say "  ${GREEN}●${NC} already shows the machine name ${DIM}($file)${NC}"
+        [ -n "$hint" ] && say "  ${YELLOW}!${NC} $hint"
+        return 0
+    fi
+    local c
+    if $DRY_RUN; then
+        for c in "${changes[@]}"; do say "  ${DIM}would${NC} $c ${DIM}in $file${NC}"; done
+        [ -n "$hint" ] && say "  ${YELLOW}!${NC} $hint"
+        return 0
+    fi
+
+    local backup; backup="$file.bak.$(date +%Y%m%dT%H%M%S)"
+    cp "$file" "$backup"
+    say "  ${DIM}backup${NC}    $backup"
+
+    if [ -n "$fmt_action" ]; then
+        tmp="$(mktemp)"
+        awk -v s="$s" -v e="$e" '
+            BEGIN { mod = "${custom.machine}" }
+            function prepend_after_quote(line,   i, p) {
+                i = index(line, "="); p = substr(line, i + 1)
+                match(p, /^[[:space:]]*("""|'"'''"'|"|'"'"')/)
+                return substr(line, 1, i + RLENGTH) mod substr(p, RLENGTH + 1)
+            }
+            NR >= s && NR <= e && !done {
+                if (NR == s) {
+                    rest = $0; sub(/^[^=]*=[[:space:]]*/, "", rest)
+                    # A multiline string that starts on the next line: prefix that line,
+                    # so the newline right after the opening quotes is still trimmed.
+                    if (s != e && (rest == "\"\"\"" || rest == "'"'''"'")) { pending = 1 }
+                    else { $0 = prepend_after_quote($0); done = 1 }
+                } else if (pending) { $0 = mod $0; done = 1 }
+            }
+            { print }' "$file" > "$tmp"
+        cat "$tmp" > "$file" && rm -f "$tmp"
+    fi
+
+    if $add_block; then
+        cat >> "$file" <<'TOML'
+
+# The machine name (MACHINE_NAME) in grey, or the OS hostname when no name is set.
+[custom.machine]
+when = true
+command = 'printf %s "${MACHINE_NAME:-$(hostname -s)}"'
+shell = ["sh"]
+style = "bright-black"
+format = "[@$output]($style) "
+TOML
+    fi
+
+    for c in "${changes[@]}"; do say "  ${GREEN}changed${NC}   $c ${DIM}in $file${NC}"; done
+    [ -n "$hint" ] && say "  ${YELLOW}!${NC} $hint"
+    return 0
+}
+
+# A health check of the result: name, repo folders, updates, links. A few seconds,
+# most of it fetching from each repo's origin. It only reports, so its result never
+# fails the install.
+run_doctor() {
+    $DRY_RUN && return 0
+    [ -x "$REPO_ROOT/scripts/a_c_doctor" ] || return 0
+    say ""
+    "$REPO_ROOT/scripts/a_c_doctor" || true
+    say "${DIM}Run this check again any time: ${NC}${GREEN}a_c_doctor${NC}"
+}
+
+# Which prompt this machine draws, and how the name gets into it.
+configure_prompt() {
+    local file="${STARSHIP_CONFIG:-$HOME/.config/starship.toml}"
+    if [ -f "$file" ]; then
+        configure_starship_prompt
+        return 0
+    fi
+
+    step "Shell prompt"
+    local rc; rc="$(detect_rc)"
+    if [ -f "$rc" ] && grep -Eq '^[^#]*starship init' "$rc"; then
+        say "  ${YELLOW}!${NC} skipped: starship is set up in $rc but has no config at $file"
+        say "    ${DIM}Create it (touch $file) and re-run to add the machine name to the prompt.${NC}"
+        return 0
+    fi
+
+    local what="the $(basename "$rc" | sed 's/^\.//; s/rc$//') prompt"
+    if [ -f "$rc" ]; then
+        local theme
+        theme="$(read_assignment ZSH_THEME "$rc")"
+        [ -n "$theme" ] && what="the oh-my-zsh prompt (theme $theme)"
+    fi
+    say "  ${GREEN}●${NC} sourced/prompt.sh puts MACHINE_NAME in grey at the start of $what"
+    say "    ${DIM}It runs after the theme and any PROMPT line in $rc. Turn it off with A_PROMPT_MACHINE_NAME=0.${NC}"
+    [ -n "${MACHINE_NAME:-${A_MACHINE_NAME:-}}" ] \
+        || say "    ${DIM}Nothing shows until the machine has a name.${NC}"
+    return 0
+}
+
 main() {
     say "${BLUE}agentic-devkit install${NC} ${DIM}($REPO_ROOT)${NC}"
     $DRY_RUN && say "${YELLOW}(dry run - nothing will change)${NC}"
 
     $LINK_ONLY || wire_shell
+    load_machine_config
     link_agents
     install_configured_overlays
 
@@ -271,7 +655,9 @@ main() {
     if [ -x "$REPO_ROOT/scripts/a_c_agent_memory" ]; then
         say ""
         say "${BLUE}Global agent guidance${NC}"
-        if $DRY_RUN; then
+        if ! ensure_machine_name; then
+            :
+        elif $DRY_RUN; then
             MY_WORKFLOW_DIR="$REPO_ROOT" "$REPO_ROOT/scripts/a_c_agent_memory" build --dry-run \
                 --provider "$(memory_provider)" 2>&1 | sed 's/^/  /'
         else
@@ -279,7 +665,10 @@ main() {
                 --provider "$(memory_provider)" 2>&1 | sed 's/^/  /'
         fi
     fi
+    install_agent_mode
+    configure_prompt
     say "\n${GREEN}Done.${NC} ${DIM}Agent assets and guidance installed (provider: $PROVIDER).${NC}"
+    run_doctor
     if ! $DRY_RUN && has_provider claude; then
         suggest_extras
     fi
