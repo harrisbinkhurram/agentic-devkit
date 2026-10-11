@@ -340,16 +340,24 @@ previous_sources() {
   awk -v b="$BEGIN_MARK" '
     $0==b {inr=1; next}
     inr && $0=="-->" {exit}
-    inr && ($1=="core"||$1=="machine"||$1=="rules"||$1=="glossary"||$1=="orgmachine"||$1=="orgrules"||$1=="orgglossary") && substr($2,1,1)=="/" {print $2}
+    inr && ($1=="core"||$1=="machine"||$1=="rules"||$1=="glossary"||$1=="orgmachine"||$1=="orgrules"||$1=="orgglossary") && substr($2,1,1)=="/" {print $1, $2}
   ' "$TARGET"
 }
 
 guard_shrink() {
-  local current=" $CORE $MACHINE_FILE $RULES_FILE $GLOSSARY_FILE $ORG_MACHINE_FILE $ORG_RULES_FILE $ORG_GLOSSARY_FILE " lost=0 old
-  while IFS= read -r old; do
+  local current=" $CORE $MACHINE_FILE $RULES_FILE $GLOSSARY_FILE $ORG_MACHINE_FILE $ORG_RULES_FILE $ORG_GLOSSARY_FILE " lost=0 kind old now
+  while IFS=' ' read -r kind old; do
     [ -n "$old" ] || continue
     case "$current" in *" $old "*) continue ;; esac
     [ -e "$old" ] || continue   # really gone: a legitimate removal
+    # The same block still comes from a file, just at a new path (a moved or
+    # replaced checkout). Nothing is dropped, so this is not a shrink.
+    case "$kind" in
+      core) now="$CORE" ;; machine) now="$MACHINE_FILE" ;; rules) now="$RULES_FILE" ;;
+      glossary) now="$GLOSSARY_FILE" ;; orgmachine) now="$ORG_MACHINE_FILE" ;;
+      orgrules) now="$ORG_RULES_FILE" ;; orgglossary) now="$ORG_GLOSSARY_FILE" ;; *) now="" ;;
+    esac
+    [ -n "$now" ] && [ -f "$now" ] && continue
     if [ "$lost" -eq 0 ]; then
       echo "${RED}refusing to rebuild:${R} this would drop a block that is in your rules file now." >&2
       echo "These sources exist on disk but are not configured in this shell:" >&2
